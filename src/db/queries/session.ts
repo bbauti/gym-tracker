@@ -14,6 +14,7 @@ import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import { db } from '../client'
 import { exercise, session, sessionExercise, setEntry, vWorkSet } from '../schema'
 import type { Exercise } from './exercises'
+import { suggestFor } from './progression'
 import { recomputeExercisePrs } from './prs'
 import { advanceRotation } from './routines'
 
@@ -115,7 +116,14 @@ export function getSessionTree(id: number): SessionTree | null {
   }
 }
 
-/** Appends the exercise plus one empty set: an exercise with no rows to type into is useless. */
+/**
+ * Appends the exercise plus one empty set: an exercise with no rows to type into is useless.
+ *
+ * La serie nace con el peso sugerido puesto como fantasma (E01–E09) y el porqué en la fila del
+ * ejercicio. Sugerido, no aplicado: `weight_g` sigue vacío hasta que el usuario tilde (§2.2). El
+ * historial excluye esta sesión — sugerir a partir de lo que se está anotando ahora sería la app
+ * persiguiéndose la cola.
+ */
 export function addExercise(sessionId: number, exerciseId: number): number {
   return db.transaction((tx) => {
     const next = tx
@@ -124,13 +132,27 @@ export function addExercise(sessionId: number, exerciseId: number): number {
       .where(eq(sessionExercise.sessionId, sessionId))
       .get()
 
+    const suggestion = suggestFor(tx, exerciseId, { excludeSessionId: sessionId })
+
     const seId = tx
       .insert(sessionExercise)
-      .values({ sessionId, exerciseId, orderIndex: next?.n ?? 0 })
+      .values({
+        sessionId,
+        exerciseId,
+        orderIndex: next?.n ?? 0,
+        suggestedReason: suggestion.reason,
+      })
       .returning({ id: sessionExercise.id })
       .get().id
 
-    tx.insert(setEntry).values({ sessionExerciseId: seId, orderIndex: 0, kind: 'normal' }).run()
+    tx.insert(setEntry)
+      .values({
+        sessionExerciseId: seId,
+        orderIndex: 0,
+        kind: 'normal',
+        suggestedWeightG: suggestion.weightG,
+      })
+      .run()
     return seId
   })
 }

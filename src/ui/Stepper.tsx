@@ -12,6 +12,11 @@ type Props = {
   step?: number
   onChange: (v: number) => void
   label: string
+  /**
+   * Cuando el label de pantalla es una sigla ("MEV") y leída en voz alta no dice nada: acá va la
+   * forma larga, sin ocupar el ancho de la fila.
+   */
+  accessibilityLabel?: string
   /** Para valores que no se leen como número pelado ("—" cuando no hay RPE, "8,5" en es). */
   format?: (v: number) => string
   /**
@@ -86,6 +91,7 @@ export default function Stepper({
   step = 1,
   onChange,
   label,
+  accessibilityLabel,
   format,
   a11yText,
 }: Props) {
@@ -145,13 +151,14 @@ export default function Stepper({
   }
 
   const display = format ? format(value) : String(value)
+  const a11yName = accessibilityLabel ?? label
 
   return (
     // Un solo elemento accesible con rol 'adjustable': VoiceOver lo ajusta con swipe arriba/abajo y
     // los dos botones dejan de ser paradas separadas del barrido.
     <View
       accessibilityActions={ACTIONS}
-      accessibilityLabel={label}
+      accessibilityLabel={a11yName}
       accessibilityRole="adjustable"
       accessibilityValue={{ max, min, now: value, text: a11yText ?? display }}
       accessible
@@ -164,7 +171,7 @@ export default function Stepper({
       <AdjustButton
         disabled={value <= lo}
         glyph="−"
-        label={`${label}, −${step}`}
+        label={`${a11yName}, −${step}`}
         onHold={() => hold(-1)}
         onPress={() => bump(-1)}
         onRelease={stop}
@@ -175,7 +182,7 @@ export default function Stepper({
       <AdjustButton
         disabled={value >= hi}
         glyph="+"
-        label={`${label}, +${step}`}
+        label={`${a11yName}, +${step}`}
         onHold={() => hold(1)}
         onPress={() => bump(1)}
         onRelease={stop}

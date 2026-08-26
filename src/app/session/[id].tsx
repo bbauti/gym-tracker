@@ -4,6 +4,7 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
 import { Alert, AppState, Dimensions, StyleSheet, View } from 'react-native'
 import Animated, {
+  FadeIn,
   useAnimatedRef,
   useAnimatedStyle,
   useScrollViewOffset,
@@ -60,7 +61,7 @@ import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
 import Menu, { type MenuItem, showMenu } from '@/ui/Menu'
-import { RowLayout, Spring, useEnterFade } from '@/ui/motion'
+import { RowLayout, Spring, Timing, useEnterFade } from '@/ui/motion'
 import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
 import RestTimer, { useNow } from '@/ui/RestTimer'
@@ -90,8 +91,17 @@ const PAD_GUESS = 400
 const SCREEN_H = Dimensions.get('window').height
 /** Lo que tiene que quedar libre bajo el dedo al enfocar: la fila entera (56) y un respiro. */
 const ROW_CLEARANCE = 56 + spacing[4]
+/** El pie de la card aparece al terminar el ejercicio: entra, no parpadea (§7.6). */
+const CTA_FADE = FadeIn.duration(Timing.fast.duration).easing(Timing.fast.easing)
+// El orden es el mismo criterio que en `SET_MENU`: primero lo que más se usa (ver ui/Menu.tsx).
 const EXERCISE_MENU: MenuItem[] = [
   { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
+  {
+    key: 'feedback',
+    label: t('session.exerciseMenu.feedback'),
+    md: 'thumb_up',
+    sf: 'hand.thumbsup',
+  },
   {
     key: 'swap',
     label: t('session.exerciseMenu.swap'),
@@ -151,6 +161,7 @@ const styles = StyleSheet.create({
   colField: { flex: SET_COLUMNS.cellFlex, textAlign: 'center' },
   colCheck: { width: SET_COLUMNS.check },
   addSet: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
+  feedbackCta: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
   note: { paddingBottom: spacing[1] },
   pad: { bottom: 0, left: 0, position: 'absolute', right: 0 },
   rest: { bottom: 0, left: 0, position: 'absolute', right: 0 },
@@ -660,6 +671,10 @@ export default function SessionScreen() {
       router.push({ params: { seId }, pathname: '/note' })
       return
     }
+    if (key === 'feedback') {
+      router.push({ params: { seId }, pathname: '/feedback' })
+      return
+    }
     if (key === 'swap') {
       router.push({ params: { seId }, pathname: '/pick-exercise' })
       return
@@ -984,6 +999,22 @@ function ExerciseCard({
   const fields = fieldsFor(exercise.metric)
   const extra = settings.rpeMode === 'none' ? null : settings.rpeMode
 
+  // El peso sugerido no siempre está en la primera fila: un día de rutina precarga las entradas en
+  // calor sin sugerencia. 'none' y 'repeat' no se explican — el fantasma de la celda ya dice todo.
+  const reason = se.suggestedReason
+  const suggestedG = sets.find((s) => s.suggestedWeightG !== null)?.suggestedWeightG ?? null
+  const suggestion =
+    suggestedG !== null && reason !== null && reason !== 'none' && reason !== 'repeat'
+      ? `${t('progression.suggested', {
+          weight: formatWeight(suggestedG, settings.unit, locale),
+        })} · ${t(`progression.reason.${reason}`)}`
+      : null
+  // Preguntar cómo salió recién cuando no queda nada por hacer en el ejercicio, y una sola vez: la
+  // hoja nunca se abre sola (§7.5), y con una respuesta guardada el pie desaparece.
+  const askFeedback =
+    se.feedback === null && sets.length > 0 && sets.every((s) => s.completedAt !== null)
+  const ctaFade = useEnterFade(askFeedback ? [se.id] : [])
+
   return (
     <Card style={styles.card}>
       <View style={styles.cardHeader}>
@@ -1018,6 +1049,11 @@ function ExerciseCard({
           </View>
         </Menu>
       </View>
+      {suggestion ? (
+        <Text color="tertiary" role="footnote" tabular>
+          {suggestion}
+        </Text>
+      ) : null}
       {se.note ? (
         <Text color="secondary" role="footnote" style={styles.note}>
           {se.note}
@@ -1069,7 +1105,9 @@ function ExerciseCard({
         </Animated.View>
       ))}
       <PressableScale
-        accessibilityLabel={t('session.addSet')}
+        // Con el nombre: el entrenamiento tiene una de estas por ejercicio y en el rotor todas
+        // dirían "Agregar serie".
+        accessibilityLabel={`${t('session.addSet')}, ${name}`}
         onPress={() => addSet(se.id)}
         scale={0.98}
         style={styles.addSet}
@@ -1078,6 +1116,23 @@ function ExerciseCard({
           {t('session.addSet')}
         </Text>
       </PressableScale>
+      {askFeedback ? (
+        // Igual que las filas: el pie del ejercicio que ya estaba terminado al abrir no anima —
+        // solo el que se termina con la pantalla abierta.
+        <Animated.View entering={ctaFade(se.id) ? CTA_FADE : undefined}>
+          <PressableScale
+            accessibilityLabel={`${t('feedback.cta')}, ${name}`}
+            accessibilityRole="button"
+            onPress={() => router.push({ params: { seId: se.id }, pathname: '/feedback' })}
+            scale={0.98}
+            style={styles.feedbackCta}
+          >
+            <Text color="secondary" role="footnote">
+              {t('feedback.cta')}
+            </Text>
+          </PressableScale>
+        </Animated.View>
+      ) : null}
     </Card>
   )
 }

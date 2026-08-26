@@ -3,6 +3,7 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { deloadState, dismissDeload, endDeload, startDeload } from '@/db/queries/progression'
 import { listRoutines, type RoutineSummary, startSessionFromDay } from '@/db/queries/routines'
 import { createSession, getActiveSessionId, getSessionTree } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
@@ -12,7 +13,9 @@ import { formatDuration } from '@/lib/units'
 import { ensureNotificationPermission } from '@/notifications'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
+import DeloadCard from '@/ui/DeloadCard'
 import EmptyState from '@/ui/EmptyState'
+import { haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import { useEnterFade } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
@@ -33,6 +36,8 @@ const ROUTINE_TABLES = [
   'session',
   'set_entry',
 ]
+// El consejo sale de los ajustes (los tres relojes del deload) y de lo entrenado en las dos semanas.
+const DELOAD_TABLES = ['settings', 'session', 'set_entry', 'session_exercise']
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.groupedBackground, flex: 1 },
@@ -216,8 +221,14 @@ export default function TrainScreen() {
   const insets = useSafeAreaInsets()
   const current = useQuery(activeSession, SESSION_TABLES)
   const routines = useQuery(listRoutines, ROUTINE_TABLES)
+  // La ventana del deload la corre el reloj, no una escritura: si vence con la app abierta el cartel
+  // se queda hasta la próxima serie. Un timer a 1 Hz para eso sería el peor cambio de la app.
+  const deload = useQuery(() => deloadState(Date.now()), DELOAD_TABLES)
   // Solo la rutina recién creada entra con fade: la tab queda montada, así que "recién" es de verdad.
   const fadeIn = useEnterFade(routines.map((s) => s.routine.id))
+  // Mismo criterio para el deload: el consejo que ya estaba al abrir la app no aparece, y esta es la
+  // pantalla de arranque — animarlo en cada cold start de la semana sería puro ruido (§7.5).
+  const deloadFade = useEnterFade(deload.advise || deload.active ? ['deload'] : [])
   // Mismo cronómetro que la pantalla de sesión: derivado del reloj, 1 Hz. No tica en pausa, sin
   // sesión, ni con la tab atrás (las tabs nativas dejan las pantallas montadas).
   const focused = useIsFocused()
@@ -275,6 +286,19 @@ export default function TrainScreen() {
               </Text>
             </Card>
           </PressableScale>
+        ) : null}
+
+        {deload.advise || deload.active ? (
+          <DeloadCard
+            entering={deloadFade('deload')}
+            onDismiss={() => dismissDeload(Date.now())}
+            onEnd={() => endDeload(Date.now())}
+            onStart={() => {
+              haptic('success')
+              startDeload(Date.now())
+            }}
+            state={deload}
+          />
         ) : null}
 
         {routines.length === 0 ? (

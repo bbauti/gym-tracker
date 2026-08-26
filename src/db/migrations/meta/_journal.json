@@ -36,6 +36,13 @@
       "when": 1787721114914,
       "tag": "0004_session_rest",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787764370014,
+      "tag": "0005_progression",
+      "breakpoints": true
     }
   ]
 }

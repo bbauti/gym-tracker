@@ -12,6 +12,11 @@ type Props = {
   sf?: string
   /** Material Symbol equivalente; sin esto SymbolView no dibuja nada en Android. */
   md?: string
+  /**
+   * Para cuando el label solo no alcanza: dos chips de filas distintas pueden decir lo mismo
+   * ("Bien" de bombeo y "Bien" de dificultad) y en el rotor quedan indistinguibles.
+   */
+  accessibilityLabel?: string
 }
 
 const styles = StyleSheet.create({
@@ -31,10 +36,17 @@ const styles = StyleSheet.create({
   wash: { backgroundColor: colors.tint, opacity: 0.18, borderRadius: radius.lg },
 })
 
-export default function Chip({ label, selected = false, onPress, sf, md }: Props) {
+export default function Chip({
+  label,
+  selected = false,
+  onPress,
+  sf,
+  md,
+  accessibilityLabel,
+}: Props) {
   return (
     <PressableScale
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={() => {

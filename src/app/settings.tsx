@@ -16,6 +16,7 @@ import {
 import { getSettings, updateSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import { defaultIncrementG } from '@/lib/units'
 import { type HapticEvent, haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import Menu from '@/ui/Menu'
@@ -353,7 +354,15 @@ export default function SettingsScreen() {
           <PickerRow
             items={unitItems}
             label={t('settings.unit')}
-            onSelect={(key) => updateSettings({ unit: key as 'kg' | 'lb' })}
+            onSelect={(key) => {
+              const unit = key as 'kg' | 'lb'
+              // El incremento sigue a la unidad solo si nunca se tocó (2,5 kg ↔ 5 lb); uno propio se respeta.
+              const untouched = settings.defaultIncrementG === defaultIncrementG(settings.unit)
+              updateSettings({
+                unit,
+                defaultIncrementG: untouched ? defaultIncrementG(unit) : settings.defaultIncrementG,
+              })
+            }}
             value={t(settings.unit === 'kg' ? 'session.kg' : 'session.lb')}
           />
           <PickerRow

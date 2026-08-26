@@ -3,7 +3,9 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { type ReactNode, useState } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
+import { db } from '@/db/client'
 import { exerciseHistory, exerciseName, getExercise, updateExercise } from '@/db/queries/exercises'
+import { isStalled, suggestFor } from '@/db/queries/progression'
 import { currentBests, listPrs } from '@/db/queries/prs'
 import type { SetRow } from '@/db/queries/session'
 import { getSettings } from '@/db/queries/settings'
@@ -78,6 +80,9 @@ const styles = StyleSheet.create({
   },
   headerButton: { paddingHorizontal: spacing[2] },
 })
+
+/** Las sesiones que mira `isStalled` (E05): el texto las nombra. */
+const STALL_SESSIONS = 3
 
 const dayFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' })
 
@@ -233,6 +238,13 @@ export default function ExerciseScreen() {
     ['personal_record', 'set_entry'],
     [exerciseId],
   )
+  // La sugerencia de hoy, recalculada acá: la que se guardó en una sesión es de ese día. Informativa
+  // y nada más — de esta pantalla no sale ningún peso escrito (§2.2).
+  const progression = useQuery(
+    () => ({ stalled: isStalled(exerciseId), suggestion: suggestFor(db, exerciseId) }),
+    ['session', 'session_exercise', 'set_entry', 'settings', 'exercise'],
+    [exerciseId],
+  )
   const settings = useQuery(getSettings, ['settings'])
   // El único que escribe `notes` es esta pantalla, así que el estado inicial alcanza.
   const [notes, setNotes] = useState(exercise?.notes ?? '')
@@ -263,6 +275,14 @@ export default function ExerciseScreen() {
     if (key === 'favorite') updateExercise(exerciseId, { isFavorite: !exercise.isFavorite })
     else updateExercise(exerciseId, { isArchived: !exercise.isArchived })
   }
+
+  const { reason, weightG } = progression.suggestion
+  const suggestion =
+    weightG !== null && reason !== 'none'
+      ? `${t('progression.suggested', { weight: formatWeight(weightG, unit, locale) })} · ${t(
+          `progression.reason.${reason}`,
+        )}`
+      : null
 
   const meta = [
     t(`muscle.${exercise.primaryMuscle}`),
@@ -356,6 +376,23 @@ export default function ExerciseScreen() {
             value={formatDuration(rest * 1000)}
           />
         </Section>
+
+        {/* Sin título: el estancamiento y el próximo peso se leen solos, y van pegados a los
+            récords porque son la misma pregunta (cómo viene esto). */}
+        {progression.stalled || suggestion ? (
+          <Section>
+            <View accessible style={styles.historyRow}>
+              {progression.stalled ? (
+                <Text>{t('exercise.stalled', { n: STALL_SESSIONS })}</Text>
+              ) : null}
+              {suggestion ? (
+                <Text color="secondary" role="footnote" tabular>
+                  {suggestion}
+                </Text>
+              ) : null}
+            </View>
+          </Section>
+        ) : null}
 
         {HAS_PRS[exercise.metric] ? (
           <Section title={t('pr.history')}>

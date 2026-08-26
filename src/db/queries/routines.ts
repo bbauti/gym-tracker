@@ -11,6 +11,7 @@ import {
   sql,
 } from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
+import type { Suggestion } from '@/lib/progression'
 import { db } from '../client'
 import {
   exercise,
@@ -22,9 +23,9 @@ import {
   session,
   sessionExercise,
   setEntry,
-  vWorkSet,
 } from '../schema'
 import type { Exercise } from './exercises'
+import { suggestFor } from './progression'
 
 export type RoutineRow = typeof routine.$inferSelect
 export type RoutineDayRow = typeof routineDay.$inferSelect
@@ -587,29 +588,10 @@ export function estimatedDurationMs(dayId: number): number | null {
 }
 
 /**
- * La sugerencia E03-lite: lo último que levantaste en ese ejercicio, en cualquier sesión. Sobre
- * `v_work_set`, así que una entrada en calor no se ofrece como peso de trabajo (trampa #2 del plan).
- */
-function lastWeightGOn(on: Db, exerciseId: number): number | null {
-  const row = on
-    .select({ g: vWorkSet.weightG })
-    .from(vWorkSet)
-    .innerJoin(sessionExercise, eq(sessionExercise.id, vWorkSet.sessionExerciseId))
-    .where(and(eq(sessionExercise.exerciseId, exerciseId), isNotNull(vWorkSet.weightG)))
-    .orderBy(desc(vWorkSet.completedAt), desc(vWorkSet.id))
-    .limit(1)
-    .get()
-  return row?.g ?? null
-}
-
-export function lastWeightG(exerciseId: number): number | null {
-  return lastWeightGOn(db, exerciseId)
-}
-
-/**
  * D07: el día se pre-carga como filas REALES sin completar, no como una plantilla que se aplica
  * después. Las series entran con su rango objetivo copiado (`target_reps_*`) y el peso sugerido en
- * `suggested_weight_g`, que la pantalla dibuja como ghost — la app sugiere, nunca aplica (§2.2).
+ * `suggested_weight_g` (con su porqué en `session_exercise.suggested_reason`), que la pantalla
+ * dibuja como ghost — la app sugiere, nunca aplica (§2.2).
  *
  * Mismos shapes de insert que `addExercise`/`addSet` de `session.ts`: la pantalla de sesión no se
  * entera de que esto salió de una rutina.
@@ -633,10 +615,31 @@ export function startSessionFromDay(dayId: number): number {
       .orderBy(asc(routineExercise.orderIndex), asc(routineExercise.id))
       .all()
 
-    // El mismo ejercicio puede aparecer dos veces en un día (dos bloques): una sola búsqueda.
-    const suggested = new Map<number, number | null>()
+    // El mismo ejercicio puede aparecer dos veces en un día (dos bloques): una sola sugerencia.
+    const suggested = new Map<number, Suggestion>()
 
     exercises.forEach((re, index) => {
+      const sets = tx
+        .select()
+        .from(routineSet)
+        .where(eq(routineSet.routineExerciseId, re.id))
+        .orderBy(asc(routineSet.orderIndex), asc(routineSet.id))
+        .all()
+
+      // La sugerencia es una por ejercicio, así que el objetivo que la guía es el de su primera
+      // serie de trabajo: la entrada en calor no pide repeticiones ni esfuerzo.
+      const target = sets.find((s) => s.kind !== 'warmup')
+      let suggestion = suggested.get(re.exerciseId)
+      if (!suggestion) {
+        suggestion = suggestFor(tx, re.exerciseId, {
+          excludeSessionId: sessionId,
+          targetRepsMax: target?.repsMax,
+          targetRepsMin: target?.repsMin,
+          targetRpe: target?.targetRpe,
+        })
+        suggested.set(re.exerciseId, suggestion)
+      }
+
       const seId = tx
         .insert(sessionExercise)
         .values({
@@ -647,21 +650,12 @@ export function startSessionFromDay(dayId: number): number {
           // El descanso de la rutina viaja con la fila: la pantalla de sesión lo prefiere al del
           // ejercicio y al de ajustes, y editar la rutina mañana no cambia el de este entrenamiento.
           restSec: re.restSec,
+          suggestedReason: suggestion.reason,
         })
         .returning({ id: sessionExercise.id })
         .get().id
 
-      if (!suggested.has(re.exerciseId)) {
-        suggested.set(re.exerciseId, lastWeightGOn(tx, re.exerciseId))
-      }
-      const suggestedWeightG = suggested.get(re.exerciseId) ?? null
-
-      const sets = tx
-        .select()
-        .from(routineSet)
-        .where(eq(routineSet.routineExerciseId, re.id))
-        .orderBy(asc(routineSet.orderIndex), asc(routineSet.id))
-        .all()
+      const suggestedWeightG = suggestion.weightG
 
       // Un ejercicio al que le borraron todas las series igual necesita una fila donde tipear,
       // igual que el que agregás a mano (`addExercise`).

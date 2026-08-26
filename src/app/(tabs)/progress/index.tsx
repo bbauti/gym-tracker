@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native'
 import Animated, { FadeIn } from 'react-native-reanimated'
 import { exerciseName, listExercises, recentExercises } from '@/db/queries/exercises'
 import { listSessions } from '@/db/queries/history'
+import { landmarks, recentMuscleLoad, weeklyHardSets } from '@/db/queries/progression'
 import { currentBests } from '@/db/queries/prs'
 import { getSettings } from '@/db/queries/settings'
 import {
@@ -27,13 +28,17 @@ import EmptyState from '@/ui/EmptyState'
 import ExerciseChart from '@/ui/ExerciseChart'
 import Heatmap from '@/ui/Heatmap'
 import ListRow from '@/ui/ListRow'
+import MuscleMap, { topLoaded } from '@/ui/MuscleMap'
 import Text from '@/ui/Text'
 import { colors, radius, spacing } from '@/ui/tokens'
+import VolumeLandmarks from '@/ui/VolumeLandmarks'
 
 /** Las tablas reales: `useQuery` escucha el hook de sqlite, que no ve la vista `v_work_set`. */
 const TABLES = ['session', 'set_entry', 'session_exercise', 'exercise'] as const
 /** `exerciseSeries` calcula el 1RM con la fórmula de ajustes: si cambia, la línea tiene que rehacerse. */
 const SERIES_TABLES = [...TABLES, 'settings'] as const
+/** Los landmarks viven en `settings.volume_landmarks`: editarlos tiene que redibujar las barras. */
+const VOLUME_TABLES = [...TABLES, 'settings'] as const
 const WEEKS = 12
 const MUSCLE_ROWS = 8
 const NEGLECTED_ROWS = 5
@@ -173,6 +178,7 @@ function useStats() {
       grid,
       // Con una sola sesión no hay ni tendencia ni comparación: la pantalla todavía no dice nada.
       hasData: listSessions({ limit: 2 }).length >= 2,
+      load: recentMuscleLoad(now),
       // Ordenado por series, que es lo que dibuja la barra: la lista viene por volumen y las
       // barras salían desordenadas, que se lee como un gráfico roto.
       muscles: volumeByMuscle(last7, to)
@@ -216,6 +222,14 @@ export default function ProgressScreen() {
     ['personal_record'],
     [selected?.id],
   )
+  // Fuera los músculos sin techo (`full_body` es 0/0/0: no es un músculo) y los que no entrenaste
+  // y encima no piden mínimo — una fila en cero de aductores no es un hueco, es la semana normal.
+  const volume = useQuery(() => {
+    const lm = landmarks()
+    return weeklyHardSets(startOfWeek(Date.now()))
+      .filter((m) => lm[m.muscle].mrv > 0 && (m.sets > 0 || lm[m.muscle].mev > 0))
+      .map((m) => ({ landmark: lm[m.muscle], muscle: m.muscle, sets: m.sets }))
+  }, VOLUME_TABLES)
 
   if (!stats.hasData) {
     return (
@@ -241,6 +255,13 @@ export default function ProgressScreen() {
   // propia key, así que la traducción decide cómo se dice sin depender de dónde cae la barra.
   const balanceLabel = `${t('progress.push')} ${stats.balance.push}, ${t('progress.pull')} ${stats.balance.pull}`
   const maxSets = Math.max(...stats.muscles.map((m) => m.sets), 1)
+  // El mapa es una sola parada del rotor: sin este resumen, un canvas de siluetas no dice nada.
+  // Sin series en la ventana no hay "lo más cargado" — el cuerpo gris entero es el dato.
+  const top = topLoaded(stats.load)
+  const mapLabel =
+    top.length === 0
+      ? t('muscleMap.a11yEmpty')
+      : t('muscleMap.a11yTop', { muscles: top.map((m) => t(`muscle.${m}`)).join(', ') })
 
   // Solo las sesiones con peso: un ejercicio de peso corporal daría una línea plana en cero.
   const points = series.filter((p) => p.e1rmG > 0)
@@ -309,6 +330,13 @@ export default function ProgressScreen() {
           </Card>
         </View>
 
+        {volume.length > 0 ? (
+          <View style={styles.section}>
+            <SectionTitle subtitle={t('landmarks.subtitle')}>{t('landmarks.title')}</SectionTitle>
+            <VolumeLandmarks rows={volume} />
+          </View>
+        ) : null}
+
         <View style={styles.section}>
           <SectionTitle>{t('progress.consistency')}</SectionTitle>
           <Card>
@@ -361,6 +389,13 @@ export default function ProgressScreen() {
             </Card>
           </View>
         ) : null}
+
+        <View style={styles.section}>
+          <SectionTitle>{t('muscleMap.title')}</SectionTitle>
+          <Card>
+            <MuscleMap label={mapLabel} load={stats.load} />
+          </Card>
+        </View>
 
         {stats.muscles.length > 0 ? (
           <View style={styles.section}>

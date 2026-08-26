@@ -18,6 +18,7 @@ for (const file of [
   '0002_session_paused_at.sql',
   '0003_set_targets.sql',
   '0004_session_rest.sql',
+  '0005_progression.sql',
 ]) {
   const sql = readFileSync(join(import.meta.dir, 'migrations', file), 'utf8')
   for (const statement of sql.split('--> statement-breakpoint')) {
@@ -38,7 +39,6 @@ const {
   duplicateRoutine,
   estimatedDurationMs,
   getRoutineTree,
-  lastWeightG,
   listRoutines,
   removeRoutineExercise,
   restoreRoutineExercise,
@@ -64,6 +64,7 @@ beforeEach(() => {
     DELETE FROM routine;
     DELETE FROM exercise;
     DELETE FROM sqlite_sequence;
+    INSERT OR IGNORE INTO settings (id) VALUES (1);
     INSERT INTO exercise (id, name_es, name_en, primary_muscle, equipment, metric)
     VALUES (${BENCH}, 'Press banca', 'Bench press', 'chest', 'barbell', 'weight_reps'),
            (${SQUAT}, 'Sentadilla', 'Squat', 'quads', 'barbell', 'weight_reps');
@@ -136,15 +137,13 @@ test('starting a day preloads real uncompleted rows with targets and a suggested
   updateRoutineSet(sets[0].id, { repsMin: 5, repsMax: 5 })
   expect(reId).toBe(tree?.days[0].exercises[0].re.id ?? -1)
 
-  // La sugerencia sale del último peso de TRABAJO: la entrada en calor de 100 kg es más nueva y no
-  // se ofrece (v_work_set), y la de 60 kg es más vieja que la de 62,5.
+  // La sugerencia sale de las series de TRABAJO: la entrada en calor de 100 kg es más nueva y no
+  // se ofrece (v_work_set), así que el tope de la sesión es 62,5.
   history(BENCH, [
     { at: 1_000, weightG: 60_000 },
     { at: 2_000, weightG: 62_500 },
     { at: 3_000, kind: 'warmup', weightG: 100_000 },
   ])
-  expect(lastWeightG(BENCH)).toBe(62_500)
-  expect(lastWeightG(SQUAT)).toBeNull()
 
   const sessionId = startSessionFromDay(dayId)
   const session = getSessionTree(sessionId)
@@ -161,7 +160,10 @@ test('starting a day preloads real uncompleted rows with targets and a suggested
   ])
   // Sugerido, no aplicado: `weight_g` sigue vacío y la serie sin completar (§2.2).
   expect(rows.every((r) => r.completedAt === null && r.weightG === null)).toBe(true)
-  expect(rows.map((r) => r.suggestedWeightG)).toEqual([62_500, 62_500, 62_500])
+  // Doble progresión (E02): las 8 reps de la sesión pasada pasaron el tope del rango pedido (5),
+  // así que la sugerencia sube un incremento (2,5 kg de ajustes) sobre los 62,5.
+  expect(rows.map((r) => r.suggestedWeightG)).toEqual([65_000, 65_000, 65_000])
+  expect(session?.exercises[0].se.suggestedReason).toBe('double')
   expect(rows.map((r) => r.orderIndex)).toEqual([0, 1, 2])
 })
 
@@ -176,6 +178,9 @@ test('an exercise left without target sets still gets a row to type into', () =>
   const session = getSessionTree(startSessionFromDay(dayId))
   expect(session?.exercises[0].sets).toHaveLength(1)
   expect(session?.exercises[0].sets[0].targetRepsMin).toBeNull()
+  // Sin historial no hay nada que sugerir, y la fila lo dice.
+  expect(session?.exercises[0].sets[0].suggestedWeightG).toBeNull()
+  expect(session?.exercises[0].se.suggestedReason).toBe('none')
 })
 
 test('finishing a workout rotates to the next day and wraps around', () => {

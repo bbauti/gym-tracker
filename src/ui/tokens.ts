@@ -26,6 +26,9 @@ export const colors = {
   tint: color('systemBlue', null, '#0A84FF'),
   fill: color('systemFill', null, 'rgba(120,120,128,0.2)'),
   destructive: color('systemRed', null, '#FF3B30'),
+  // Semáforo de las bandas de volumen (E07): en el rango que rinde, en el techo, pasado.
+  success: color('systemGreen', null, '#34C759'),
+  warning: color('systemOrange', null, '#FF9500'),
   // Blanco fijo a propósito: es el color de lo que va ENCIMA de `tint` o `destructive`
   // (el check de una serie, la tecla de acento, el tacho del swipe), y esos dos son
   // suficientemente oscuros en light y en dark como para no necesitar variante.

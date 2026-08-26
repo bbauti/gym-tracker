@@ -71,12 +71,31 @@ export const SET_KINDS = [
   'rest_pause',
   'giant',
 ] as const
+/**
+ * Por qué la app sugiere ese peso (E01–E09). Es lo que la card del ejercicio muestra al pie; el
+ * orden es el de precedencia de `suggest()` en `@/lib/progression`.
+ */
+export const SUGGESTED_REASONS = [
+  'none',
+  'repeat',
+  'linear',
+  'double',
+  'rpe_easy',
+  'rpe_hard',
+  'feedback_hard',
+  'stall',
+  'deload',
+] as const
 
 export type Muscle = (typeof MUSCLES)[number]
 export type Equipment = (typeof EQUIPMENT)[number]
 export type Pattern = (typeof PATTERNS)[number]
 export type Metric = (typeof METRICS)[number]
 export type SetKind = (typeof SET_KINDS)[number]
+export type Reason = (typeof SUGGESTED_REASONS)[number]
+
+/** E09. Las tres preguntas de la hoja de feedback; todas opcionales, todas de una sola escala. */
+export type Feedback = { pump?: 1 | 2 | 3; difficulty?: 1 | 2 | 3; pain?: 0 | 1 }
 
 const id = () => integer('id').primaryKey({ autoIncrement: true })
 
@@ -96,6 +115,15 @@ export const settings = sqliteTable(
     defaultRestSec: integer('default_rest_sec').notNull().default(90),
     locale: text('locale', { enum: ['es', 'en'] }),
     seedVersion: integer('seed_version').notNull().default(0),
+    /** E07: solo lo que el usuario tocó. Lo que falta sale de `DEFAULT_LANDMARKS`. */
+    volumeLandmarks: text('volume_landmarks', { mode: 'json' }).$type<
+      Partial<Record<Muscle, { mev: number; mav: number; mrv: number }>>
+    >(),
+    /** E06. Los tres relojes del deload: hasta cuándo está activo, cuándo se descartó el consejo y
+     *  cuándo terminó el último. Los dos últimos son ventanas de silencio, no historial. */
+    deloadUntil: integer('deload_until'),
+    deloadDismissedAt: integer('deload_dismissed_at'),
+    deloadEndedAt: integer('deload_ended_at'),
   },
   (t) => [check('settings_single_row', sql`${t.id} = 1`)],
 )
@@ -245,7 +273,10 @@ export const sessionExercise = sqliteTable(
     // el descanso no puede cambiar abajo del entrenamiento. `null` = el del ejercicio o el de ajustes.
     restSec: integer('rest_sec'),
     note: text('note'),
-    feedback: text('feedback', { mode: 'json' }).$type<Record<string, number | string>>(),
+    feedback: text('feedback', { mode: 'json' }).$type<Feedback>(),
+    /** Por qué se sugirió el peso que quedó en `set_entry.suggested_weight_g` de la primera serie.
+     *  Se escribe junto con él y no se recalcula: la sugerencia es de ese día. */
+    suggestedReason: text('suggested_reason', { enum: SUGGESTED_REASONS }),
   },
   (t) => [
     index('idx_session_exercise_session').on(t.sessionId),

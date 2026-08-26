@@ -170,6 +170,22 @@ function Gate() {
             sheetGrabberVisible: true,
           }}
         />
+        <Stack.Screen
+          name="feedback"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="landmarks"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
       </Stack>
       <ToastHost />
     </>
