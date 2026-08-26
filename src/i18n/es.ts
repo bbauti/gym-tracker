@@ -19,6 +19,45 @@ export default {
   'library.noResults.title': 'Sin resultados',
   'library.noResults.description': 'Probá con otro nombre o con menos letras.',
 
+  'settings.title': 'Ajustes',
+  'settings.done': 'Listo',
+  'settings.export': 'Exportar',
+  'settings.exportDb': 'Base de datos (.db)',
+  'settings.exportJson': 'JSON',
+  'settings.exportCsv': 'CSV',
+  'settings.backups': 'Backups',
+  'settings.backupNow': 'Hacer un backup ahora',
+  'settings.lastBackup': 'Último backup: {when}',
+  'settings.noBackup': 'Todavía no hay backups',
+  'settings.restore': 'Restaurar',
+  'settings.restoreFile': 'Desde un archivo…',
+  'settings.restoreConfirm.title': '¿Restaurar este backup?',
+  'settings.restoreConfirm.body':
+    'Se reemplazan todos los datos actuales por los del backup. No se puede deshacer.',
+  'settings.restoreConfirm.action': 'Restaurar',
+  'settings.danger': 'Zona de riesgo',
+  'settings.wipe': 'Borrar todos los datos',
+  'settings.wipeConfirm.title': '¿Borrar todos los datos?',
+  'settings.wipeConfirm.body':
+    'Se borran las sesiones, las rutinas y los ejercicios propios. Antes se guarda un backup por las dudas.',
+  'settings.wipeConfirm.action': 'Borrar todo',
+  'settings.wipeDone.title': 'Datos borrados',
+  'settings.wipeDone.body': 'Guardamos un backup con los datos anteriores por si querés volver.',
+
+  'backup.done.restore': 'Datos restaurados',
+  'backup.error.invalid_file': 'Ese archivo no es un backup de Gym Tracker. No se cambió nada.',
+  'backup.error.integrity': 'El backup está dañado: no se puede restaurar. No se cambió nada.',
+  'backup.error.newer_schema':
+    'El backup viene de una versión más nueva de la app. Actualizala y probá de nuevo.',
+  'backup.error.unsupported': 'No se pudo completar la operación. No se cambió nada.',
+
+  'time.justNow': 'recién',
+  'time.minutesAgo': 'hace {n} min',
+  'time.hoursAgo': 'hace {n} h',
+  'time.daysAgo': 'hace {n} d',
+
+  'common.cancel': 'Cancelar',
+
   'error.title': 'Algo salió mal',
   'error.retry': 'Reintentar',
 

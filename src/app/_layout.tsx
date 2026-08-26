@@ -1,14 +1,23 @@
-import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router'
+import {
+  DarkTheme,
+  DefaultTheme,
+  type ErrorBoundaryProps,
+  router,
+  Stack,
+  ThemeProvider,
+} from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { Suspense, use, useEffect } from 'react'
 import { StyleSheet, useColorScheme, View } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { startAutoBackup } from '@/db/backup'
 import { ready } from '@/db/client'
 import { getSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
 import Button from '@/ui/Button'
 import { setHapticsEnabled } from '@/ui/haptics'
+import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { colors, spacing } from '@/ui/tokens'
 
@@ -25,7 +34,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   centered: { textAlign: 'center' },
+  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
 })
+
+/** El modal no tiene botón atrás: sin esto solo se cierra arrastrando (y con VoiceOver, con nada). */
+function DoneButton() {
+  return (
+    <PressableScale
+      accessibilityLabel={t('settings.done')}
+      onPress={() => router.back()}
+      style={styles.done}
+    >
+      <Text color="tint" role="headline">
+        {t('settings.done')}
+      </Text>
+    </PressableScale>
+  )
+}
 
 /** Todo lo de abajo asume migraciones + seed aplicados; el splash cubre la espera. */
 function Gate() {
@@ -40,8 +65,23 @@ function Gate() {
     SplashScreen.hideAsync()
   }, [])
 
+  // Backup rotativo al mandar la app a background (devuelve la baja de la suscripción).
+  useEffect(() => startAutoBackup(), [])
+
   // Los formSheet (pick-exercise, plates, session-edit) se registran acá en la Fase 2.
-  return <Stack screenOptions={{ headerShown: false }} />
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen
+        name="settings"
+        options={{
+          presentation: 'modal',
+          headerShown: true,
+          title: t('settings.title'),
+          headerRight: () => <DoneButton />,
+        }}
+      />
+    </Stack>
+  )
 }
 
 /** expo-router envuelve hasta el layout raíz en <Try catch={ErrorBoundary}>: sin esto, un `ready`

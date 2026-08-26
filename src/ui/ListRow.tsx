@@ -58,7 +58,12 @@ export default function ListRow({ title, subtitle, trailing, onPress, chevron }:
 
   if (!onPress)
     return (
-      <View accessible accessibilityLabel={label} style={styles.container}>
+      <View
+        accessible
+        accessibilityLabel={label}
+        accessibilityState={{ disabled: true }}
+        style={styles.container}
+      >
         {content}
       </View>
     )

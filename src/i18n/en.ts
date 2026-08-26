@@ -20,6 +20,45 @@ export default {
   'library.noResults.title': 'No results',
   'library.noResults.description': 'Try another name, or fewer letters.',
 
+  'settings.title': 'Settings',
+  'settings.done': 'Done',
+  'settings.export': 'Export',
+  'settings.exportDb': 'Database (.db)',
+  'settings.exportJson': 'JSON',
+  'settings.exportCsv': 'CSV',
+  'settings.backups': 'Backups',
+  'settings.backupNow': 'Back up now',
+  'settings.lastBackup': 'Last backup: {when}',
+  'settings.noBackup': 'No backups yet',
+  'settings.restore': 'Restore',
+  'settings.restoreFile': 'From a file…',
+  'settings.restoreConfirm.title': 'Restore this backup?',
+  'settings.restoreConfirm.body':
+    'This replaces all current data with the backup. It cannot be undone.',
+  'settings.restoreConfirm.action': 'Restore',
+  'settings.danger': 'Danger zone',
+  'settings.wipe': 'Delete all data',
+  'settings.wipeConfirm.title': 'Delete all data?',
+  'settings.wipeConfirm.body':
+    'This deletes your sessions, routines and custom exercises. A backup is saved first, just in case.',
+  'settings.wipeConfirm.action': 'Delete everything',
+  'settings.wipeDone.title': 'Data deleted',
+  'settings.wipeDone.body': 'A backup of the previous data was saved, in case you want it back.',
+
+  'backup.done.restore': 'Data restored',
+  'backup.error.invalid_file': 'That file is not a Gym Tracker backup. Nothing was changed.',
+  'backup.error.integrity': 'This backup is damaged and cannot be restored. Nothing was changed.',
+  'backup.error.newer_schema':
+    'This backup comes from a newer version of the app. Update the app and try again.',
+  'backup.error.unsupported': 'The operation could not be completed. Nothing was changed.',
+
+  'time.justNow': 'just now',
+  'time.minutesAgo': '{n} min ago',
+  'time.hoursAgo': '{n} h ago',
+  'time.daysAgo': '{n} d ago',
+
+  'common.cancel': 'Cancel',
+
   'error.title': 'Something went wrong',
   'error.retry': 'Retry',
 
