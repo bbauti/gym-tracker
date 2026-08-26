@@ -15,6 +15,11 @@
       "infoPlist": {
         "CFBundleDevelopmentRegion": "es",
         "CFBundleLocalizations": ["es", "en"]
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyTrackingDomains": []
       }
     },
     "android": {
@@ -36,9 +41,12 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0A6FD6",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 140,
+          "dark": {
+            "backgroundColor": "#0A2C52"
+          }
         }
       ],
       [
