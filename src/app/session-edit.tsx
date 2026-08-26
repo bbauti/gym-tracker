@@ -58,15 +58,12 @@ export default function SessionEditScreen() {
 
   function save() {
     if (!row) return
-    const startedAt = date.getTime()
-    // Mover la fecha corre el entrenamiento entero: si `ended_at` no acompaña, la duración pasa a
-    // ser "tres días" y el historial miente.
-    const endedAt = row.endedAt === null ? null : row.endedAt + (startedAt - row.startedAt)
+    // Mover la fecha corre el entrenamiento entero (`ended_at` y las series completadas): de eso se
+    // encarga `updateSession`, que es donde vive la transacción.
     updateSession(row.id, {
       name: name.trim() || null,
       note: note.trim() || null,
-      startedAt,
-      endedAt,
+      startedAt: date.getTime(),
     })
     router.back()
   }

@@ -5,6 +5,7 @@ import { AppState } from 'react-native'
 import { gToUnit } from '@/lib/units'
 import { db, sqlite } from './client'
 import { BackupError, importInto, type SqlLike, wipeInto } from './import'
+import { backfillPrs } from './queries/prs'
 import { seed } from './seed'
 import { notifyAll } from './useQuery'
 
@@ -275,6 +276,8 @@ export function importDatabase(path: string, target: SqlLike = sqlite): void {
   // A backup taken before the last catalogue update comes back missing exercises: re-seeding puts
   // them back without touching anything the user edited (see seed.ts upsert rules).
   seed(db)
+  // Un backup de antes de la Fase 5 vuelve con historial y sin récords: se reconstruyen del historial.
+  backfillPrs()
   notifyAll()
 }
 

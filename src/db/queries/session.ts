@@ -1,8 +1,40 @@
-import { and, asc, desc, eq, inArray, isNull, notExists, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  notExists,
+  type SQL,
+  sql,
+} from 'drizzle-orm'
+import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import { db } from '../client'
-import { exercise, session, sessionExercise, setEntry } from '../schema'
+import { exercise, session, sessionExercise, setEntry, vWorkSet } from '../schema'
 import type { Exercise } from './exercises'
+import { recomputeExercisePrs } from './prs'
 import { advanceRotation } from './routines'
+
+// biome-ignore lint/suspicious/noExplicitAny: los parámetros del driver, que son justo lo que varía
+type Db = BaseSQLiteDatabase<'sync', any, any, any>
+
+/**
+ * Los ejercicios que pierden (o recuperan) series de trabajo cuando se borra algo. Borrar arrastra
+ * las filas de `personal_record` por FK cascade, pero nadie reproduce a las que quedan vivas: sin
+ * esto, borrar la sesión del récord se lleva puestos los récords de las sesiones que siguen ahí.
+ * Se lee ANTES del delete — después no hay de dónde sacarlo.
+ */
+function workedExercises(tx: Db, where: SQL): number[] {
+  return tx
+    .selectDistinct({ id: sessionExercise.exerciseId })
+    .from(sessionExercise)
+    .innerJoin(vWorkSet, eq(vWorkSet.sessionExerciseId, sessionExercise.id))
+    .where(where)
+    .all()
+    .map((r) => r.id)
+}
 
 export type SessionRow = typeof session.$inferSelect
 export type SessionExerciseRow = typeof sessionExercise.$inferSelect
@@ -119,7 +151,11 @@ export function removeSessionExercise(seId: number): SessionExerciseSnapshot | n
       .where(eq(setEntry.sessionExerciseId, seId))
       .orderBy(asc(setEntry.orderIndex), asc(setEntry.id))
       .all()
+    const worked = workedExercises(tx, eq(sessionExercise.id, seId))
     tx.delete(sessionExercise).where(eq(sessionExercise.id, seId)).run()
+    // Igual que `deleteSet`: los récords de las series que se fueron ya no existen, y los que
+    // tapaban vuelven a valer.
+    for (const exerciseId of worked) recomputeExercisePrs(exerciseId, tx)
     return { se, sets }
   })
 }
@@ -137,6 +173,10 @@ export function restoreSessionExercise(snapshot: SessionExerciseSnapshot): void 
     if (!row) return
     tx.insert(sessionExercise).values(snapshot.se).run()
     if (snapshot.sets.length > 0) tx.insert(setEntry).values(snapshot.sets).run()
+    // Las filas vuelven con el `is_pr` que tenían; los récords, no (se fueron con el borrado). El
+    // replay es lo único que deja de acuerdo a las dos fuentes: la serie con badge y el historial.
+    if (snapshot.sets.some((s) => s.completedAt !== null && s.kind !== 'warmup'))
+      recomputeExercisePrs(snapshot.se.exerciseId, tx)
   })
 }
 
@@ -154,7 +194,16 @@ export function reorderExercises(sessionId: number, orderedSeIds: number[]): voi
 
 /** Keeps the sets: swapping is "I did this on the other machine", not "start over". */
 export function swapExercise(seId: number, exerciseId: number): void {
-  db.update(sessionExercise).set({ exerciseId }).where(eq(sessionExercise.id, seId)).run()
+  db.transaction((tx) => {
+    const se = tx.select().from(sessionExercise).where(eq(sessionExercise.id, seId)).get()
+    if (!se || se.exerciseId === exerciseId) return
+    // Las series completadas se mudan de ejercicio, y sus récords con ellas: hay que reproducir los
+    // dos lados, el que las pierde y el que las hereda.
+    const worked = workedExercises(tx, eq(sessionExercise.id, seId))
+    tx.update(sessionExercise).set({ exerciseId }).where(eq(sessionExercise.id, seId)).run()
+    if (worked.length === 0) return
+    for (const id of [se.exerciseId, exerciseId]) recomputeExercisePrs(id, tx)
+  })
 }
 
 export function updateSessionExercise(seId: number, patch: { note?: string | null }): void {
@@ -162,6 +211,15 @@ export function updateSessionExercise(seId: number, patch: { note?: string | nul
   db.update(sessionExercise).set(patch).where(eq(sessionExercise.id, seId)).run()
 }
 
+/**
+ * Mover la fecha mueve el entrenamiento **entero**. Las estadísticas cuentan las sesiones por
+ * `session.started_at` y las series por `v_work_set.completed_at`: correr solo la cabecera parte el
+ * mismo entrenamiento en dos días (o dos semanas), y el replay de récords —que ordena por
+ * `(completed_at, id)`— cambia de resultado. `ended_at` va con ellos: es la duración del historial.
+ *
+ * `paused_at` y `rest_ends_at` NO se corren: son relojes de una sesión en curso contra `Date.now()`,
+ * no marcas de cuándo pasó el entrenamiento.
+ */
 export function updateSession(
   id: number,
   patch: Partial<
@@ -172,7 +230,43 @@ export function updateSession(
   >,
 ): void {
   if (Object.keys(patch).length === 0) return
-  db.update(session).set(patch).where(eq(session.id, id)).run()
+  db.transaction((tx) => {
+    const row = tx.select().from(session).where(eq(session.id, id)).get()
+    if (!row) return
+    const delta = patch.startedAt === undefined ? 0 : patch.startedAt - row.startedAt
+
+    // El que escribe `ended_at` a mano manda: acá solo se lo arrastra si nadie lo tocó.
+    const endedAt =
+      delta !== 0 && patch.endedAt === undefined && row.endedAt !== null
+        ? row.endedAt + delta
+        : undefined
+    tx.update(session)
+      .set(endedAt === undefined ? patch : { ...patch, endedAt })
+      .where(eq(session.id, id))
+      .run()
+    if (delta === 0) return
+
+    tx.update(setEntry)
+      .set({ completedAt: sql`${setEntry.completedAt} + ${delta}` })
+      .where(
+        and(
+          isNotNull(setEntry.completedAt),
+          inArray(
+            setEntry.sessionExerciseId,
+            tx
+              .select({ id: sessionExercise.id })
+              .from(sessionExercise)
+              .where(eq(sessionExercise.sessionId, id)),
+          ),
+        ),
+      )
+      .run()
+
+    // El historial se reproduce en otro orden: un récord de esta sesión puede quedar tapado por otra
+    // —o destaparla— según a qué día se la mueva.
+    for (const exerciseId of workedExercises(tx, eq(sessionExercise.sessionId, id)))
+      recomputeExercisePrs(exerciseId, tx)
+  })
 }
 
 /**
@@ -317,7 +411,11 @@ export function endSession(id: number): void {
   })
 }
 
-/** Exercises and sets go with it (FK cascade). */
+/** Exercises and sets go with it (FK cascade), y con ellas los récords que dieron. */
 export function deleteSession(id: number): void {
-  db.delete(session).where(eq(session.id, id)).run()
+  db.transaction((tx) => {
+    const worked = workedExercises(tx, eq(sessionExercise.sessionId, id))
+    tx.delete(session).where(eq(session.id, id)).run()
+    for (const exerciseId of worked) recomputeExercisePrs(exerciseId, tx)
+  })
 }

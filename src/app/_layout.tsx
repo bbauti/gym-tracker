@@ -13,6 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { KeyboardProvider } from 'react-native-keyboard-controller'
 import { startAutoBackup } from '@/db/backup'
 import { ready } from '@/db/client'
+import { backfillPrs } from '@/db/queries/prs'
 import { getSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
@@ -67,6 +68,10 @@ function Gate() {
   useEffect(() => {
     SplashScreen.hideAsync()
   }, [])
+
+  // El historial de antes de la Fase 5 no tiene récords: se reconstruyen una vez (`personal_record`
+  // es cache, no dato). Acá y no en `client.ts` porque `queries/prs` importa el cliente (ciclo).
+  useEffect(() => backfillPrs(), [])
 
   // Backup rotativo al mandar la app a background (devuelve la baja de la suscripción).
   useEffect(() => startAutoBackup(), [])

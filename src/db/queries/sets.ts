@@ -1,7 +1,15 @@
 import { and, asc, desc, eq, exists, isNotNull, ne, sql } from 'drizzle-orm'
+import type { PrKind } from '@/lib/prs'
 import { db } from '../client'
 import { session, sessionExercise, setEntry } from '../schema'
+import { recomputeExercisePrs, recordPrs, setOwner } from './prs'
 import type { SetRow } from './session'
+
+/**
+ * Las columnas que pueden mover un récord. Cambiar una nota o el RPE de una serie completada no
+ * obliga a reproducir el ejercicio; cambiar el peso, las reps o el tipo, sí.
+ */
+const PR_COLUMNS = ['weightG', 'reps', 'kind'] as const
 
 export type SetPatch = Partial<
   Pick<
@@ -51,23 +59,48 @@ export function getSet(setId: number): SetRow | null {
   return db.select().from(setEntry).where(eq(setEntry.id, setId)).get() ?? null
 }
 
+/**
+ * Si el patch **cambia** algo que mueve un récord. `flush()` manda el patch entero en cada blur, así
+ * que el caso normal es "el mismo peso que ya estaba": comparar contra la fila (un lookup por pk)
+ * sale mucho más barato que reproducir el historial completo del ejercicio por nada.
+ */
+function movesRecords(setId: number, patch: SetPatch): boolean {
+  const touched = PR_COLUMNS.filter((c) => c in patch)
+  if (touched.length === 0) return false
+  const row = getSet(setId)
+  return row !== null && touched.some((c) => patch[c] !== row[c])
+}
+
 export function updateSet(setId: number, patch: SetPatch): void {
   if (Object.keys(patch).length === 0) return
-  db.update(setEntry).set(patch).where(eq(setEntry.id, setId)).run()
+  if (!movesRecords(setId, patch)) {
+    db.update(setEntry).set(patch).where(eq(setEntry.id, setId)).run()
+    return
+  }
+  // Editar una serie YA completada reescribe el historial: el récord que dio puede no darlo más, y
+  // uno que quedó tapado puede pasar a valer. `personal_record` es cache, así que se reconstruye.
+  db.transaction((tx) => {
+    tx.update(setEntry).set(patch).where(eq(setEntry.id, setId)).run()
+    const owner = setOwner(tx, setId)
+    if (owner && owner.completedAt !== null) recomputeExercisePrs(owner.exerciseId, tx)
+  })
 }
 
 /**
  * One transaction: the values (`fill` carries the ghost values when the user typed nothing), the
- * tick, and the rest timer. One write, one change notification, one re-render.
+ * tick, the rest timer and the records (H01–H05). One write, one change notification, one re-render
+ * — la fila ya sale con `is_pr` puesto, sin un segundo viaje ni un event bus.
+ *
+ * Devuelve los récords que se rompieron para que la pantalla decida el háptico y el badge.
  */
 export function completeSet(
   setId: number,
   sessionId: number,
   fill: SetPatch,
   restSec: number | null,
-): void {
+): PrKind[] {
   const now = Date.now()
-  db.transaction((tx) => {
+  return db.transaction((tx) => {
     tx.update(setEntry)
       .set({ ...fill, completedAt: now })
       .where(eq(setEntry.id, setId))
@@ -81,19 +114,29 @@ export function completeSet(
         .where(eq(session.id, sessionId))
         .run()
     }
+    return recordPrs(tx, setId)
   })
 }
 
 /** Only the tick: the values stay, because un-ticking is "wait, that was wrong", not "delete". */
 export function uncompleteSet(setId: number): void {
-  db.update(setEntry).set({ completedAt: null }).where(eq(setEntry.id, setId)).run()
+  db.transaction((tx) => {
+    tx.update(setEntry).set({ completedAt: null }).where(eq(setEntry.id, setId)).run()
+    const owner = setOwner(tx, setId)
+    if (owner) recomputeExercisePrs(owner.exerciseId, tx)
+  })
 }
 
 /** Returns the row so the undo toast can put it back exactly as it was. */
 export function deleteSet(setId: number): SetRow {
-  const row = db.delete(setEntry).where(eq(setEntry.id, setId)).returning().get()
-  if (!row) throw new Error(`set ${setId} not found`)
-  return row
+  return db.transaction((tx) => {
+    // El ejercicio se lee ANTES: después del delete no hay fila de la que sacarlo.
+    const owner = setOwner(tx, setId)
+    const row = tx.delete(setEntry).where(eq(setEntry.id, setId)).returning().get()
+    if (!row) throw new Error(`set ${setId} not found`)
+    if (owner && owner.completedAt !== null) recomputeExercisePrs(owner.exerciseId, tx)
+    return row
+  })
 }
 
 /**
@@ -102,13 +145,18 @@ export function deleteSet(setId: number): SetRow {
  * screen, and the FK insert would throw inside its onPress.
  */
 export function restoreSet(row: SetRow): void {
-  const se = db
-    .select({ id: sessionExercise.id })
-    .from(sessionExercise)
-    .where(eq(sessionExercise.id, row.sessionExerciseId))
-    .get()
-  if (!se) return
-  db.insert(setEntry).values(row).run()
+  db.transaction((tx) => {
+    const se = tx
+      .select({ exerciseId: sessionExercise.exerciseId })
+      .from(sessionExercise)
+      .where(eq(sessionExercise.id, row.sessionExerciseId))
+      .get()
+    if (!se) return
+    tx.insert(setEntry).values(row).run()
+    // Volvió una serie completada: sus récords se fueron con el borrado (FK cascade) y las que
+    // vinieron después pueden haberlos heredado. Se reproduce el ejercicio y quedan como estaban.
+    if (row.completedAt !== null) recomputeExercisePrs(se.exerciseId, tx)
+  })
 }
 
 /**

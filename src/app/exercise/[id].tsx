@@ -4,11 +4,13 @@ import { type ReactNode, useState } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { exerciseHistory, exerciseName, getExercise, updateExercise } from '@/db/queries/exercises'
+import { currentBests, listPrs } from '@/db/queries/prs'
 import type { SetRow } from '@/db/queries/session'
 import { getSettings } from '@/db/queries/settings'
 import type { Metric } from '@/db/schema'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import type { PrKind } from '@/lib/prs'
 import {
   defaultIncrementG,
   formatDistance,
@@ -20,6 +22,7 @@ import {
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
 import Menu from '@/ui/Menu'
+import { prKindsLabel } from '@/ui/PrBadge'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
@@ -56,6 +59,14 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     backgroundColor: colors.secondaryGroupedBackground,
   },
+  bests: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    backgroundColor: colors.secondaryGroupedBackground,
+  },
+  best: { flex: 1, gap: spacing[1] },
+  prLabel: { flex: 1, gap: spacing[1] },
   notes: {
     minHeight: 88,
     padding: spacing[4],
@@ -106,6 +117,19 @@ function formatSet(set: SetRow, metric: Metric, unit: Unit): string {
       return weight ?? reps ?? '—'
     }
   }
+}
+
+/**
+ * Un récord sale de peso × repeticiones (H01–H04): un ejercicio que se mide en tiempo o en metros
+ * nunca va a tener uno, así que la sección no se dibuja para no prometer nada.
+ */
+const HAS_PRS: Record<Metric, boolean> = {
+  weight_reps: true,
+  weighted_bodyweight: true,
+  reps: true,
+  duration: false,
+  distance: false,
+  duration_distance: false,
 }
 
 /** El trigger del Menu no es un Pressable: el menú nativo necesita el tap para abrirse. */
@@ -178,6 +202,21 @@ const incrementsFor = (unit: Unit): number[] =>
 
 const RESTS_SEC = [60, 90, 120, 180]
 
+const EMPTY = '—'
+
+/**
+ * Una suma de gramos, no una marca: en lb sin redondear el volumen de una serie salía "1.322,77 lb"
+ * (mismo criterio que Progreso e Historial). 82,5 kg redondeado a 83 kg, en cambio, ya no es la marca.
+ */
+const BULK = { maxFractionDigits: 0 }
+
+/** Las tres marcas de hoy, en el orden en el que se miran: cuánto levantó, cuánto vale, cuánto movió. */
+const BEST_COLUMNS = [
+  { bulk: false, key: 'weightG', label: 'progress.maxWeight' },
+  { bulk: false, key: 'e1rmG', label: 'progress.e1rm' },
+  { bulk: true, key: 'volumeG', label: 'progress.volume' },
+] as const
+
 export default function ExerciseScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const exerciseId = Number(id)
@@ -185,6 +224,13 @@ export default function ExerciseScreen() {
   const history = useQuery(
     () => exerciseHistory(exerciseId),
     ['session', 'session_exercise', 'set_entry'],
+    [exerciseId],
+  )
+  // Los récords son un cache reconstruible (plan §3): cualquier cosa que los mueva reescribe
+  // `personal_record`, así que alcanza con esa tabla. `set_entry` está porque la fila trae su serie.
+  const records = useQuery(
+    () => ({ bests: currentBests(exerciseId), list: listPrs(exerciseId, 10) }),
+    ['personal_record', 'set_entry'],
     [exerciseId],
   )
   const settings = useQuery(getSettings, ['settings'])
@@ -310,6 +356,58 @@ export default function ExerciseScreen() {
             value={formatDuration(rest * 1000)}
           />
         </Section>
+
+        {HAS_PRS[exercise.metric] ? (
+          <Section title={t('pr.history')}>
+            {records.list.length === 0 ? (
+              <View style={styles.historyRow}>
+                <Text color="secondary">{t('pr.none')}</Text>
+              </View>
+            ) : (
+              <>
+                <View accessible style={styles.bests}>
+                  {BEST_COLUMNS.map(({ bulk, key, label }) => {
+                    const value = records.bests[key]
+                    return (
+                      <View key={key} style={styles.best}>
+                        {/* Sin `numberOfLines`: con Dynamic Type grande la etiqueta envuelve en vez
+                            de quedar en "Peso…", que en tres columnas se lee todo igual. */}
+                        <Text color="secondary" role="footnote">
+                          {t(label)}
+                        </Text>
+                        <Text role="headline" tabular>
+                          {value === null
+                            ? EMPTY
+                            : formatWeight(value, unit, locale, bulk ? BULK : undefined)}
+                        </Text>
+                      </View>
+                    )
+                  })}
+                </View>
+                {records.list.map((pr) => {
+                  // `value_g` de un récord de peso corporal es 0, no null (`prRows` normaliza con
+                  // `?? 0`): "Reps a 0 kg" no se lee, y el nombre del equipo dice lo mismo.
+                  const weight = pr.valueG
+                    ? formatWeight(pr.valueG, unit, locale, pr.kind === 'volume' ? BULK : undefined)
+                    : t('equipment.bodyweight')
+                  return (
+                    <View accessible key={pr.id} style={styles.row}>
+                      <View style={styles.prLabel}>
+                        <Text numberOfLines={1}>{prKindsLabel([pr.kind as PrKind], weight)}</Text>
+                        <Text color="secondary" role="footnote">
+                          {formatDay(pr.achievedAt)}
+                        </Text>
+                      </View>
+                      <Text role="headline" tabular>
+                        {pr.kind === 'reps_at_weight' ? (pr.reps ?? EMPTY) : weight}
+                      </Text>
+                    </View>
+                  )
+                })}
+              </>
+            )}
+          </Section>
+        ) : null}
 
         <Section title={t('exercise.history')}>
           {history.length === 0 ? (

@@ -1,5 +1,5 @@
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated, {
   useAnimatedStyle,
@@ -11,8 +11,10 @@ import type { SetRow as Row } from '@/db/queries/session'
 import type { SetKind } from '@/db/schema'
 import type { Field } from '@/db/types'
 import { type Locale, t } from '@/i18n'
+import type { PrKind } from '@/lib/prs'
 import { formatDuration, formatWeight, gToUnit, type Unit } from '@/lib/units'
 import { Spring, Timing } from './motion'
+import PrBadge, { prKindsLabel } from './PrBadge'
 import PressableScale from './PressableScale'
 import Text from './Text'
 import { colors, radius, spacing } from './tokens'
@@ -27,6 +29,8 @@ type Props = {
   locale: Locale
   focused: Field | null
   draft: string
+  /** Qué récords rompió, si se rompieron en esta pantalla. Vacío = solo se sabe que hubo (H05). */
+  prKinds: PrKind[]
   /** Sube al volver del background: no se lee, solo re-dispara el efecto de abajo (ver la pantalla). */
   resumeKey: number
   /** `pageY` = dónde cayó el dedo: la pantalla lo usa para subir la fila por encima del numpad. */
@@ -154,8 +158,12 @@ const styles = StyleSheet.create({
     minHeight: ROW_HEIGHT,
   },
   tint: { backgroundColor: colors.tint, borderRadius: radius.sm },
+  // El badge del récord va DENTRO de esta columna, debajo del número, y no al lado: el ancho lo
+  // comparte la fila de encabezados, así que una pastilla en línea correría las celdas de esa fila
+  // sola y las columnas dejarían de alinear. Apilado entra en los 44 pt sin estirar la fila.
   badge: {
     alignItems: 'center',
+    gap: spacing[1],
     justifyContent: 'center',
     minHeight: 44,
     width: SET_COLUMNS.badge,
@@ -255,6 +263,7 @@ export default function SetRow({
   locale,
   focused,
   draft,
+  prKinds,
   resumeKey,
   onFocus,
   onComplete,
@@ -285,6 +294,17 @@ export default function SetRow({
   const tintStyle = useAnimatedStyle(() => ({ opacity: mark.get() * TINT_ALPHA }))
 
   const badge = KIND_BADGE[set.kind] ?? String(index + 1)
+  // El récord entra solo cuando pasa ACÁ: una serie que ya venía con récord (abrir una sesión vieja,
+  // o la card que vuelve con Deshacer) monta la pastilla puesta. Mismo motivo que el tilde de arriba.
+  const [prAtMount] = useState(set.isPr)
+  // Peso corporal es un peso más para los récords (más dominadas es récord), pero "Reps a 0 kg" no
+  // se lee: ahí el nombre del equipo dice lo mismo y ya está traducido.
+  const prWeight = !set.isPr
+    ? ''
+    : set.weightG
+      ? formatWeight(set.weightG, unit, locale)
+      : t('equipment.bodyweight')
+  const kindLabel = `${index + 1}. ${t(`setKind.${set.kind}`)}`
   const extra = showRpe === 'none' ? null : showRpe
   const ghostSummary = prev
     ? fields.map((f) => formatField(f, prev, unit, locale) ?? EMPTY).join(' × ')
@@ -296,14 +316,23 @@ export default function SetRow({
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, styles.tint, tintStyle]}
       />
+      {/* La pastilla queda dentro del pressable a propósito: iOS lee un elemento accesible entero,
+          así que el récord se anuncia en el mismo barrido que el número en vez de robar una parada. */}
       <PressableScale
-        accessibilityLabel={`${index + 1}. ${t(`setKind.${set.kind}`)}`}
+        accessibilityLabel={
+          set.isPr
+            ? `${kindLabel}, ${t('pr.badge')}: ${prKinds.length === 0 ? t('pr.new') : prKindsLabel(prKinds, prWeight)}`
+            : kindLabel
+        }
         onPress={onKindPress}
         style={styles.badge}
       >
         <Text color={set.kind === 'normal' ? 'secondary' : 'tint'} role="footnote" tabular>
           {badge}
         </Text>
+        {set.isPr ? (
+          <PrBadge animate={!prAtMount} kinds={prKinds} resumeKey={resumeKey} weight={prWeight} />
+        ) : null}
       </PressableScale>
       <Text color="tertiary" numberOfLines={1} role="footnote" style={styles.prev} tabular>
         {ghostSummary}

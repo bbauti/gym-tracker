@@ -44,6 +44,7 @@ import { SET_KINDS, type SetKind } from '@/db/schema'
 import { type Field, type Focus, fieldsFor, type NumKey } from '@/db/types'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import type { PrKind } from '@/lib/prs'
 import { adjustRestEndsAt, elapsedMs } from '@/lib/rest'
 import {
   defaultIncrementG,
@@ -79,6 +80,9 @@ const ROUTINE_DAY_TABLES = ['routine_day']
 /** Los ghosts son de sesiones anteriores: no cambian mientras entrenás. */
 const NO_TABLES: string[] = []
 const KEEP_AWAKE_TAG = 'gym-session'
+/** Identidad estable: sin récords las cards reciben siempre el mismo mapa y no se re-renderizan. */
+const NO_PRS: ReadonlyMap<number, PrKind[]> = new Map()
+const NO_KINDS: PrKind[] = []
 const MAX_DRAFT = 6
 /** Alto con el que arranca el numpad hasta que mide: cualquier valor que lo deje fuera de pantalla. */
 const PAD_GUESS = 400
@@ -291,6 +295,12 @@ export default function SessionScreen() {
   const [restHeight, setRestHeight] = useState(0)
   /** Sube en cada vuelta del background: lo único que hace es re-correr los efectos de las filas. */
   const [resumeKey, setResumeKey] = useState(0)
+  /**
+   * Los récords que se rompieron en esta pantalla, por serie. `is_pr` ya viaja en el árbol y es lo
+   * que dibuja la pastilla; esto es solo el detalle para leerla en voz alta y el registro de lo que
+   * ya se festejó (H05: una serie se festeja una vez, aunque se destilde y se vuelva a tildar).
+   */
+  const [prKinds, setPrKinds] = useState<ReadonlyMap<number, PrKind[]>>(NO_PRS)
   const shown = useSharedValue(0)
   const insets = useSafeAreaInsets()
   // El inicio del descanso es derivable: la última serie completada de la sesión. Sin columna nueva.
@@ -582,8 +592,17 @@ export default function SessionScreen() {
     // El descanso que pedía la rutina primero (copiado a la fila al pre-cargar el día, D07), después
     // el del ejercicio y por último el de ajustes.
     const restSec = ex.se.restSec ?? ex.exercise.defaultRestSec ?? config.defaultRestSec
-    haptic(last ? 'exerciseDone' : 'setComplete')
-    completeSet(setId, sessionId, fill, restSec)
+    // Acá el háptico va DESPUÉS del write y no antes (borrar lo hace al revés): cuál suena depende
+    // de si la serie rompió un récord, y eso lo contesta el write. Es sync y son dos queries.
+    const kinds = completeSet(setId, sessionId, fill, restSec)
+    // Tier 1 y nada más (§7.5): la pastilla de la fila y un aviso. Sin confetti, y una sola vez por
+    // serie — destildar y volver a tildar reproduce el récord en la base, pero no es un récord nuevo.
+    const celebrate = kinds.length > 0 && !prKinds.has(setId)
+    haptic(celebrate ? 'success' : last ? 'exerciseDone' : 'setComplete')
+    // Sin toast: el tier 1 es la pastilla de la fila y el háptico, nada más. Un toast acá además
+    // pisaba el de deshacer de un borrado (`Toast` muestra uno solo a la vez, el nuevo reemplaza al
+    // viejo), y con eso la única celebración de la app se comía la única forma de recuperar datos.
+    if (celebrate) setPrKinds((seen) => new Map(seen).set(setId, kinds))
     // Contra el `rest_ends_at` que acabó de escribir `completeSet` (guarda su propio `now` adentro de
     // la transacción) y no contra un `Date.now()` nuevo: el aviso y el cero de la pantalla son el
     // mismo instante, no dos que se separan si cae un frame lento en el medio. Un descanso de 0 s no
@@ -832,6 +851,7 @@ export default function SessionScreen() {
                     onFocus={focusOn}
                     onMenu={handleExerciseMenu}
                     onSetMenu={handleSetMenu}
+                    prKinds={prKinds}
                     resumeKey={resumeKey}
                     settings={settings}
                   />
@@ -936,6 +956,8 @@ type CardProps = {
   onSetMenu: (setId: number) => void
   onDeleteSet: (setId: number) => void
   onMenu: (seId: number, key: string) => void
+  /** Los récords de esta pantalla, por serie: la fila solo lee el suyo (ver la pantalla). */
+  prKinds: ReadonlyMap<number, PrKind[]>
   /** Solo viaja hasta el efecto de SetRow, que re-apunta sus shared values al volver del background. */
   resumeKey: number
 }
@@ -951,6 +973,7 @@ function ExerciseCard({
   onSetMenu,
   onDeleteSet,
   onMenu,
+  prKinds,
   resumeKey,
 }: CardProps) {
   const { se, exercise, sets } = item
@@ -1035,6 +1058,7 @@ function ExerciseCard({
               onComplete={(pageY) => onComplete(set.id, pageY)}
               onFocus={(f, pageY) => onFocus(set.id, f, pageY)}
               onKindPress={() => onSetMenu(set.id)}
+              prKinds={prKinds.get(set.id) ?? NO_KINDS}
               prev={ghosts[index] ?? null}
               resumeKey={resumeKey}
               set={set}
