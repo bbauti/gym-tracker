@@ -246,6 +246,10 @@ const rpeItems = [
 
 const rpeLabel = { rpe: t('session.rpe'), rir: t('session.rir'), none: t('settings.rpeNone') }
 
+// El descanso por defecto de la app; cada ejercicio puede pisarlo con el suyo (exercise/[id]).
+const REST_CHOICES = [60, 90, 120, 180]
+const restItems = REST_CHOICES.map((n) => ({ key: String(n), label: t('settings.seconds', { n }) }))
+
 export default function SettingsScreen() {
   const [busy, setBusy] = useState<string | null>(null)
   const settings = useQuery(getSettings, ['settings'])
@@ -357,6 +361,12 @@ export default function SettingsScreen() {
             label={t('settings.rpeMode')}
             onSelect={(key) => updateSettings({ rpeMode: key as 'rpe' | 'rir' | 'none' })}
             value={rpeLabel[settings.rpeMode]}
+          />
+          <PickerRow
+            items={restItems}
+            label={t('settings.defaultRest')}
+            onSelect={(key) => updateSettings({ defaultRestSec: Number(key) })}
+            value={t('settings.seconds', { n: settings.defaultRestSec })}
           />
         </Section>
 

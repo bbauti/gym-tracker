@@ -27,6 +27,8 @@ type Props = {
   locale: Locale
   focused: Field | null
   draft: string
+  /** Sube al volver del background: no se lee, solo re-dispara el efecto de abajo (ver la pantalla). */
+  resumeKey: number
   /** `pageY` = dónde cayó el dedo: la pantalla lo usa para subir la fila por encima del numpad. */
   onFocus: (f: Field, pageY: number) => void
   onComplete: () => void
@@ -195,6 +197,7 @@ export default function SetRow({
   locale,
   focused,
   draft,
+  resumeKey,
   onFocus,
   onComplete,
   onKindPress,
@@ -206,10 +209,15 @@ export default function SetRow({
   const fill = useSharedValue(done ? 1 : 0)
   const mark = useSharedValue(done ? 1 : 0)
 
+  // `resumeKey` está en las deps y no en el cuerpo a propósito: una animación que arrancó con la app
+  // en background nunca progresó (el diálogo de permisos de Android es otra Activity), así que la
+  // serie quedaba completada en la base y el tilde sin llenar. Al volver, esto vuelve a apuntar los
+  // shared values al mismo target: si ya llegaron, no se ve nada.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: el efecto reacciona a `resumeKey`, no lo lee
   useEffect(() => {
     fill.set(withSpring(done ? 1 : 0, Spring.press))
     mark.set(withTiming(done ? 1 : 0, Timing.fast))
-  }, [done, fill, mark])
+  }, [done, fill, mark, resumeKey])
 
   const fillStyle = useAnimatedStyle(() => ({
     opacity: fill.get(),

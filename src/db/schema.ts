@@ -217,6 +217,9 @@ export const session = sqliteTable(
     startedAt: integer('started_at').notNull(),
     endedAt: integer('ended_at'),
     pausedMs: integer('paused_ms').notNull().default(0),
+    // Pausa abierta (epoch ms) o null. El acumulado vive en `pausedMs`: al reanudar se suma y
+    // esta vuelve a null, así el cronómetro se deriva del reloj sin correr nada (plan §2.6).
+    pausedAt: integer('paused_at'),
     note: text('note'),
     restEndsAt: integer('rest_ends_at'),
   },

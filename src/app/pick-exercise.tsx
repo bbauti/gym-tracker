@@ -2,8 +2,8 @@ import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { router, useLocalSearchParams } from 'expo-router'
 import { SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
-import { StyleSheet, TextInput, View } from 'react-native'
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
+import { Platform, StyleSheet, TextInput, View } from 'react-native'
+import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   type Exercise,
@@ -22,6 +22,8 @@ import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 const RECENTS = 8
+
+const ANDROID = Platform.OS === 'android'
 
 // FlashList 2 lo trae prendido: acá cada tecla es otra lista, no un chat al que le llegan
 // mensajes arriba, y anclar la posición deja el scroll en cualquier lado.
@@ -104,6 +106,14 @@ export default function PickExerciseScreen() {
   const { sessionId, seId } = useLocalSearchParams<{ sessionId: string; seId: string }>()
   const insets = useSafeAreaInsets()
   const list = useRef<FlashListRef<Row>>(null)
+  // En Android la hoja no se achica con el teclado: react-native-screens la expande al detent más
+  // alto y deja que el teclado le tape la parte de abajo (`SheetDelegate`, `KeyboardVisible`). La
+  // KeyboardAvoidingView mide su frame una sola vez —con la hoja todavía a medio detent y laid out
+  // al alto máximo— y con eso calculaba un colchón mucho más grande que el teclado: la lista quedaba
+  // cortada con una banda gris. Así que ahí el hueco lo pone la lista y mide exactamente el teclado
+  // (el inset de IME ya incluye la barra de navegación, por eso reemplaza a `insets.bottom` y no se
+  // suma). En iOS la hoja sí se achica sola, la KAV mide bien y da 0: se queda como estaba.
+  const keyboard = useKeyboardState((s) => (ANDROID && s.isVisible ? s.height : 0))
   const [q, setQ] = useState('')
   const query = q.trim()
 
@@ -179,8 +189,14 @@ export default function PickExerciseScreen() {
   return (
     // La sheet no tiene header propio (el Stack la registra sin él): el título va acá adentro.
     // `automaticOffset` mide la posición real en pantalla; sin eso, dentro de un formSheet la
-    // KeyboardAvoidingView cree que arranca en y=0 y no compensa nada.
-    <KeyboardAvoidingView automaticOffset behavior="padding" style={styles.screen}>
+    // KeyboardAvoidingView cree que arranca en y=0 y no compensa nada. En Android está apagada
+    // (ver `keyboard` arriba): ahí compensa la lista.
+    <KeyboardAvoidingView
+      automaticOffset
+      behavior="padding"
+      enabled={!ANDROID}
+      style={styles.screen}
+    >
       <View style={styles.head}>
         <Text accessibilityRole="header" role="headline">
           {seId ? t('pick.swap') : t('pick.title')}
@@ -223,7 +239,7 @@ export default function PickExerciseScreen() {
 
       {/* Nada de layout animations: la lista se rearma en cada tecla (§7.5). */}
       <FlashList
-        contentContainerStyle={{ paddingBottom: insets.bottom + spacing[4] }}
+        contentContainerStyle={{ paddingBottom: (keyboard || insets.bottom) + spacing[4] }}
         data={rows}
         getItemType={getItemType}
         keyboardDismissMode="on-drag"

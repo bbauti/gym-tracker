@@ -1,5 +1,5 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
-import { router, Stack, useLocalSearchParams } from 'expo-router'
+import { router, Stack, useIsFocused, useLocalSearchParams } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
 import { Alert, AppState, Dimensions, StyleSheet, View } from 'react-native'
@@ -11,16 +11,23 @@ import Animated, {
   useSharedValue,
   withSpring,
 } from 'react-native-reanimated'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { exerciseName } from '@/db/queries/exercises'
 import {
+  clearRest,
   deleteSession,
   endSession,
+  getSession,
   getSessionTree,
+  lastCompletedAt,
+  pauseSession,
   type SetRow as Row,
   removeSessionExercise,
   reorderExercises,
   restoreSessionExercise,
+  resumeSession,
   type SessionTree,
+  setRestEndsAt,
 } from '@/db/queries/session'
 import {
   addSet,
@@ -37,7 +44,16 @@ import { SET_KINDS, type SetKind } from '@/db/schema'
 import { type Field, type Focus, fieldsFor, type NumKey } from '@/db/types'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
-import { defaultIncrementG, formatWeight, gToUnit, parseWeight, type Unit } from '@/lib/units'
+import { adjustRestEndsAt, elapsedMs } from '@/lib/rest'
+import {
+  defaultIncrementG,
+  formatDuration,
+  formatWeight,
+  gToUnit,
+  parseWeight,
+  type Unit,
+} from '@/lib/units'
+import { cancelRestEnd, scheduleRestEnd } from '@/notifications'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
@@ -46,15 +62,18 @@ import Menu, { type MenuItem, showMenu } from '@/ui/Menu'
 import { RowLayout, Spring } from '@/ui/motion'
 import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
+import RestTimer, { useNow } from '@/ui/RestTimer'
 import SetRow, { fieldLabel, fieldNumber, hasValue, SET_COLUMNS } from '@/ui/SetRow'
 import Sortable from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 const SESSION_TABLES = ['session', 'session_exercise', 'set_entry', 'exercise']
 const SETTINGS_TABLES = ['settings']
+/** El descanso arranca en la última serie completada: el MAX(completed_at) es el único dato nuevo. */
+const REST_TABLES = ['set_entry']
 /** Los ghosts son de sesiones anteriores: no cambian mientras entrenás. */
 const NO_TABLES: string[] = []
 const KEEP_AWAKE_TAG = 'gym-session'
@@ -120,6 +139,20 @@ const styles = StyleSheet.create({
   addSet: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
   note: { paddingBottom: spacing[1] },
   pad: { bottom: 0, left: 0, position: 'absolute', right: 0 },
+  rest: { bottom: 0, left: 0, position: 'absolute', right: 0 },
+  elapsed: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing[2],
+    paddingBottom: spacing[3],
+  },
+  paused: {
+    backgroundColor: colors.fill,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[1] / 2,
+  },
 })
 
 /** El texto tipeado a columna. `null` = no se puede escribir eso (y no se escribe nada). */
@@ -211,6 +244,7 @@ type Live = {
   open: boolean
   pad: Focus | null
   padHeight: number
+  restOverlay: number
   settings: Settings
   tree: SessionTree | null
 }
@@ -244,7 +278,13 @@ export default function SessionScreen() {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [padHeight, setPadHeight] = useState(0)
+  const [restHeight, setRestHeight] = useState(0)
+  /** Sube en cada vuelta del background: lo único que hace es re-correr los efectos de las filas. */
+  const [resumeKey, setResumeKey] = useState(0)
   const shown = useSharedValue(0)
+  const insets = useSafeAreaInsets()
+  // El inicio del descanso es derivable: la última serie completada de la sesión. Sin columna nueva.
+  const restStartedAt = useQuery(() => lastCompletedAt(sessionId), REST_TABLES, [sessionId])
   // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
   const scrollRef = useAnimatedRef<Animated.ScrollView>()
   const offset = useScrollViewOffset(scrollRef)
@@ -264,9 +304,19 @@ export default function SessionScreen() {
   // árbol cacheado de las cards que no cambiaron (§5.4: una tecla re-renderiza card + fila +
   // numpad). Se escribe en los `put*` y se sincroniza después de cada commit; escribirlo EN RENDER
   // haría que el React Compiler no compile la pantalla y no quedaría nada memoizado.
-  const live = useRef<Live>({ draft, ghosts, open, pad, padHeight, settings, tree })
+  // `Date.now()` en render no es reactivo a propósito: mientras el descanso corre, quien lo apaga es
+  // el propio RestTimer (onDone limpia la fila y esto se recalcula con el write). En pausa el
+  // descanso está congelado, así que la barra no va.
+  const restEndsAt = tree?.session.restEndsAt ?? null
+  const restRunning =
+    restEndsAt !== null && tree?.session.pausedAt === null && restEndsAt > Date.now()
+  // Lo que el timer tapa POR ARRIBA del numpad: se lo sube `padHeight - insets.bottom` (ver el
+  // `restStyle`), así que le sobresale eso. Va al ref porque lo lee `scrollIntoView`.
+  const restOverlay = restRunning ? Math.max(0, restHeight - insets.bottom) : 0
+
+  const live = useRef<Live>({ draft, ghosts, open, pad, padHeight, restOverlay, settings, tree })
   useEffect(() => {
-    live.current = { draft, ghosts, open, pad, padHeight, settings, tree }
+    live.current = { draft, ghosts, open, pad, padHeight, restOverlay, settings, tree }
   })
 
   const active = tree !== null && tree.session.endedAt === null
@@ -283,9 +333,14 @@ export default function SessionScreen() {
   }, [open, shown])
 
   // Confirmar lo tipeado al irse la app a background: sin esto un swipe hacia arriba pierde el draft.
+  // Al volver, `resumeKey` re-dispara los efectos de las filas: una animación de Reanimated que
+  // arrancó con la app atrás (el diálogo de permisos de Android, una llamada) nunca progresó y el
+  // tilde se quedó a medio pintar aunque la serie esté completada. Re-apuntar los shared values al
+  // target los deja donde ya estaban cuando la animación sí corrió: no se ve nada.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') flush(live.current)
+      if (state === 'active') setResumeKey((k) => k + 1)
+      else flush(live.current)
     })
     return () => sub.remove()
   }, [])
@@ -299,9 +354,17 @@ export default function SessionScreen() {
     transform: [{ translateY: (1 - shown.get()) * (padHeight > 0 ? padHeight : PAD_GUESS) }],
   }))
 
+  // El timer se sube arriba del numpad con el mismo shared value que lo abre (interrumpible, sin un
+  // segundo reloj). Se sube `padHeight - insets.bottom` y no `padHeight`: así el respiro inferior del
+  // timer queda tapado por el numpad en vez de dejar un colchón de card entre los dos.
+  const restStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -shown.get() * Math.max(0, padHeight - insets.bottom) }],
+  }))
+
   if (!tree) return null
 
   const row = tree.session
+  const paused = row.pausedAt !== null
   const found = pad ? findSet(tree, pad.setId) : null
   const padIncrementG = found?.ex.exercise.defaultIncrementG ?? defaultIncrementG(settings.unit)
   const padStep = pad ? stepOf(pad.field, padIncrementG, settings.unit) : null
@@ -332,10 +395,12 @@ export default function SessionScreen() {
     putDraft('')
   }
 
-  // El numpad tapa el tercio de abajo: si la celda que tocaste cae ahí, se sube el scroll lo justo.
-  // `pageY` es dónde cayó el dedo (lo reenvía SetRow); sin eso habría que medir cada fila.
+  // El numpad tapa el tercio de abajo (y con un descanso corriendo, la barra tapa otro tanto arriba
+  // del numpad): si la celda que tocaste cae ahí, se sube el scroll lo justo. `pageY` es dónde cayó
+  // el dedo (lo reenvía SetRow); sin eso habría que medir cada fila.
   const scrollIntoView = (pageY: number) => {
-    const overlap = pageY + ROW_CLEARANCE - (SCREEN_H - (live.current.padHeight || PAD_GUESS))
+    const { padHeight: ph, restOverlay: overlay } = live.current
+    const overlap = pageY + ROW_CLEARANCE - (SCREEN_H - (ph || PAD_GUESS) - overlay)
     if (overlap > 0) scrollRef.current?.scrollTo({ animated: true, y: offset.get() + overlap })
   }
 
@@ -350,6 +415,30 @@ export default function SessionScreen() {
   const blur = () => {
     commit()
     putOpen(false)
+  }
+
+  // La notificación la programa la pantalla y no `completeSet`: es la única que sabe si el descanso
+  // sigue vivo (saltarlo, ±15 s, pausar). El primer `scheduleRestEnd` del teléfono es también el que
+  // pide el permiso — nunca al arrancar la app. Si lo niegan, esto es un no-op silencioso.
+  const scheduleRest = (endsAt: number) => {
+    scheduleRestEnd(endsAt).catch(() => {})
+  }
+
+  /** Saltar, llegar a 0 y terminar son lo mismo: la fila se limpia y la notificación se cancela. */
+  const endRest = () => {
+    clearRest(sessionId)
+    cancelRestEnd().catch(() => {})
+  }
+
+  const adjustRest = (deltaMs: number) => {
+    // La fila y no `live.current`: `useQuery` difiere la invalidación un `setTimeout(0)`, así que dos
+    // toques en el mismo turno (un doble tap, un frame lento) leerían los dos el valor viejo y el
+    // segundo pisaría al primero — +30 s quedarían en +15 s, con la notificación en el instante malo.
+    const current = getSession(sessionId)?.restEndsAt
+    if (current == null) return
+    const next = adjustRestEndsAt(current, deltaMs, Date.now())
+    setRestEndsAt(sessionId, next)
+    scheduleRest(next)
   }
 
   const handleKey = (k: NumKey) => {
@@ -429,6 +518,10 @@ export default function SessionScreen() {
     if (set.completedAt !== null) {
       haptic('setUncomplete')
       uncompleteSet(setId)
+      // El descanso lo arrancó la última serie completada: si es justo esa la que se destildó, se
+      // queda sin dueño — `restStartedAt` cae a una serie más vieja (o a `startedAt`) y la barra
+      // pasaría a dibujarse contra un total inventado, con la notificación igual de viva.
+      if (restEndsAt !== null && set.completedAt === restStartedAt) endRest()
       return
     }
     // Los campos sin tocar se confirman con el ghost; lo tipeado pisa al ghost. Un solo write.
@@ -443,8 +536,15 @@ export default function SessionScreen() {
     if (at?.setId === setId && typed !== '')
       Object.assign(fill, parseDraft(at.field, typed, config.unit))
     const last = ex.sets.every((s) => s.id === setId || s.completedAt !== null)
+    const restSec = ex.exercise.defaultRestSec ?? config.defaultRestSec
     haptic(last ? 'exerciseDone' : 'setComplete')
-    completeSet(setId, sessionId, fill, ex.exercise.defaultRestSec ?? config.defaultRestSec)
+    completeSet(setId, sessionId, fill, restSec)
+    // Contra el `rest_ends_at` que acabó de escribir `completeSet` (guarda su propio `now` adentro de
+    // la transacción) y no contra un `Date.now()` nuevo: el aviso y el cero de la pantalla son el
+    // mismo instante, no dos que se separan si cae un frame lento en el medio. Un descanso de 0 s no
+    // es un descanso.
+    const endsAt = getSession(sessionId)?.restEndsAt
+    if (restSec > 0 && endsAt != null) scheduleRest(endsAt)
     if (at?.setId === setId) {
       putDraft('')
       putOpen(false)
@@ -524,6 +624,21 @@ export default function SessionScreen() {
       router.push({ params: { id: sessionId }, pathname: '/session-edit' })
       return
     }
+    // En pausa el cronómetro y el descanso se congelan juntos. ponytail: `resumeSession` corre el
+    // `rest_ends_at` hacia adelante lo que duró la pausa, así que el descanso "sigue" donde estaba.
+    // Techo: pausar durante un descanso de 3 min y volver a la hora deja el descanso entero por
+    // delante. Upgrade: guardar el remaining al pausar y ofrecer "saltar" al reanudar.
+    if (key === 'pause') {
+      pauseSession(sessionId)
+      cancelRestEnd().catch(() => {})
+      return
+    }
+    if (key === 'resume') {
+      resumeSession(sessionId)
+      const endsAt = getSession(sessionId)?.restEndsAt
+      if (endsAt !== null && endsAt !== undefined) scheduleRest(endsAt)
+      return
+    }
     if (key === 'finish') {
       confirm(
         t('session.finishConfirm.title'),
@@ -533,6 +648,7 @@ export default function SessionScreen() {
         () => {
           haptic('success')
           endSession(sessionId)
+          cancelRestEnd().catch(() => {})
           router.back()
         },
       )
@@ -548,6 +664,7 @@ export default function SessionScreen() {
       () => {
         haptic('delete')
         deleteSession(sessionId)
+        cancelRestEnd().catch(() => {})
         router.back()
       },
     )
@@ -556,6 +673,12 @@ export default function SessionScreen() {
   const headerItems: MenuItem[] = active
     ? [
         { key: 'finish', label: t('session.finish'), md: 'check', sf: 'checkmark.circle' },
+        {
+          key: paused ? 'resume' : 'pause',
+          label: t(paused ? 'session.resume' : 'session.pause'),
+          md: paused ? 'play_arrow' : 'pause',
+          sf: paused ? 'play.circle' : 'pause.circle',
+        },
         { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
         {
           destructive: true,
@@ -602,9 +725,11 @@ export default function SessionScreen() {
         }}
       />
       <Animated.ScrollView
+        // El colchón de abajo es la suma de lo que hay apilado ahí (timer + numpad). Con los dos
+        // puestos sobra el safe area del timer, que queda tapado por el numpad: sobrar no molesta.
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: spacing[6] + (open ? padHeight : 0) },
+          { paddingBottom: spacing[6] + (open ? padHeight : 0) + restHeight },
         ]}
         contentInsetAdjustmentBehavior="automatic"
         onScrollBeginDrag={commit}
@@ -614,6 +739,12 @@ export default function SessionScreen() {
         // worklet: no cuesta un render).
         scrollEventThrottle={16}
       >
+        <SessionElapsed
+          endedAt={row.endedAt}
+          pausedAt={row.pausedAt}
+          pausedMs={row.pausedMs}
+          startedAt={row.startedAt}
+        />
         {tree.exercises.length === 0 ? (
           <View style={styles.empty}>
             <EmptyState
@@ -646,6 +777,7 @@ export default function SessionScreen() {
                     onFocus={focusOn}
                     onMenu={handleExerciseMenu}
                     onSetMenu={handleSetMenu}
+                    resumeKey={resumeKey}
                     settings={settings}
                   />
                 </Animated.View>
@@ -662,6 +794,24 @@ export default function SessionScreen() {
           variant="tinted"
         />
       </Animated.ScrollView>
+      {/* La pila de abajo: [timer][numpad]. El timer va primero para que el numpad lo dibuje encima
+          (se pisan justo el safe area) y `box-none` para no robarle taps a la lista cuando no hay
+          descanso. Se mide siempre: el colchón del scroll es su alto. */}
+      <Animated.View
+        onLayout={(e) => setRestHeight(e.nativeEvent.layout.height)}
+        pointerEvents="box-none"
+        style={[styles.rest, restStyle]}
+      >
+        {restRunning ? (
+          <RestTimer
+            endsAt={restEndsAt}
+            onAdjust={adjustRest}
+            onDone={endRest}
+            onSkip={endRest}
+            startedAt={restStartedAt ?? row.startedAt}
+          />
+        ) : null}
+      </Animated.View>
       <Animated.View
         accessibilityElementsHidden={!open}
         importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
@@ -683,6 +833,43 @@ export default function SessionScreen() {
 
 const keyOfExercise = (item: SessionTree['exercises'][number]) => String(item.se.id)
 
+type ElapsedProps = {
+  startedAt: number
+  pausedMs: number
+  pausedAt: number | null
+  endedAt: number | null
+}
+
+/**
+ * El cronómetro de la sesión, derivado del reloj (nunca acumula tics). Componente aparte para que el
+ * tic de 1 Hz re-renderice esta fila y no la pantalla entera con sus cards.
+ * Terminada, el reloj para en `ended_at`; en pausa para solo (el tic ni siquiera corre).
+ */
+function SessionElapsed({ startedAt, pausedMs, pausedAt, endedAt }: ElapsedProps) {
+  const focused = useIsFocused()
+  const now = useNow(startedAt + pausedMs, focused && pausedAt === null && endedAt === null)
+  const time = formatDuration(elapsedMs(startedAt, pausedMs, pausedAt, endedAt ?? now))
+
+  return (
+    <View style={styles.elapsed}>
+      {/* Sin live region: a 1 Hz el lector de pantalla no dejaría oír nada más. */}
+      <Text
+        accessibilityLabel={t('session.elapsed', { time })}
+        color="secondary"
+        role="footnote"
+        tabular
+      >
+        {time}
+      </Text>
+      {pausedAt === null ? null : (
+        <Text color="secondary" role="caption" style={styles.paused}>
+          {t('session.paused')}
+        </Text>
+      )}
+    </View>
+  )
+}
+
 type CardProps = {
   item: SessionTree['exercises'][number]
   ghosts: Row[]
@@ -694,6 +881,8 @@ type CardProps = {
   onSetMenu: (setId: number) => void
   onDeleteSet: (setId: number) => void
   onMenu: (seId: number, key: string) => void
+  /** Solo viaja hasta el efecto de SetRow, que re-apunta sus shared values al volver del background. */
+  resumeKey: number
 }
 
 function ExerciseCard({
@@ -707,6 +896,7 @@ function ExerciseCard({
   onSetMenu,
   onDeleteSet,
   onMenu,
+  resumeKey,
 }: CardProps) {
   const { se, exercise, sets } = item
   const name = exerciseName(exercise, locale)
@@ -788,6 +978,7 @@ function ExerciseCard({
               onFocus={(f, pageY) => onFocus(set.id, f, pageY)}
               onKindPress={() => onSetMenu(set.id)}
               prev={ghosts[index] ?? null}
+              resumeKey={resumeKey}
               set={set}
               showRpe={settings.rpeMode}
               unit={settings.unit}

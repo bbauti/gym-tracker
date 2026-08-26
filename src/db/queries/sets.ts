@@ -65,7 +65,10 @@ export function completeSet(
       .set({ ...fill, completedAt: now })
       .where(eq(setEntry.id, setId))
       .run()
-    if (restSec !== null) {
+    // `> 0` y no solo `!== null`: un ejercicio con 0 s de descanso no estampa un `rest_ends_at` ya
+    // vencido en la fila. La barra igual no se dibujaba, pero ese valor muerto es justo lo que
+    // `resumeSession` correría hacia el futuro.
+    if (restSec !== null && restSec > 0) {
       tx.update(session)
         .set({ restEndsAt: now + restSec * 1000 })
         .where(eq(session.id, sessionId))

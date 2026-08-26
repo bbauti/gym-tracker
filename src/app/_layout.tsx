@@ -16,6 +16,7 @@ import { ready } from '@/db/client'
 import { getSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
+import { configureNotifications } from '@/notifications'
 import Button from '@/ui/Button'
 import { setHapticsEnabled } from '@/ui/haptics'
 import PressableScale from '@/ui/PressableScale'
@@ -69,6 +70,10 @@ function Gate() {
 
   // Backup rotativo al mandar la app a background (devuelve la baja de la suscripción).
   useEffect(() => startAutoBackup(), [])
+
+  // Handler de foreground + canal de Android. Acá y no en el import: el permiso se pide recién
+  // cuando arranca el primer descanso (§ Fase 3), esto solo configura cómo se muestran.
+  useEffect(() => configureNotifications(), [])
 
   // Un solo Stack raíz: los formSheet son rutas, nunca un <Modal> de RN (§7.5). El título de la
   // sesión lo pone la pantalla con su propio <Stack.Screen>, porque depende de la fila.

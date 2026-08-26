@@ -156,11 +156,88 @@ export function updateSessionExercise(seId: number, patch: { note?: string | nul
 export function updateSession(
   id: number,
   patch: Partial<
-    Pick<SessionRow, 'name' | 'note' | 'startedAt' | 'endedAt' | 'pausedMs' | 'restEndsAt'>
+    Pick<
+      SessionRow,
+      'name' | 'note' | 'startedAt' | 'endedAt' | 'pausedMs' | 'pausedAt' | 'restEndsAt'
+    >
   >,
 ): void {
   if (Object.keys(patch).length === 0) return
   db.update(session).set(patch).where(eq(session.id, id)).run()
+}
+
+/**
+ * El descanso se guarda como "cuándo termina", no como "cuánto falta": la cuenta la deriva la
+ * pantalla de `Date.now()` y nadie tiene que correr nada mientras el teléfono está bloqueado
+ * (plan §2.6). Programar/cancelar la notificación es del que llama (`@/notifications`): esta capa
+ * no conoce expo.
+ */
+export function setRestEndsAt(id: number, endsAt: number): void {
+  db.update(session).set({ restEndsAt: endsAt }).where(eq(session.id, id)).run()
+}
+
+/** Saltar, llegar a cero o terminar: el descanso deja de existir, no queda en 0. */
+export function clearRest(id: number): void {
+  db.update(session).set({ restEndsAt: null }).where(eq(session.id, id)).run()
+}
+
+/**
+ * Cuándo arrancó el descanso en curso: el último set completado de la sesión. Derivable, así que no
+ * hay una columna `rest_started_at` que mantener sincronizada — la barra de progreso necesita el
+ * largo total y esto se lo da.
+ */
+export function lastCompletedAt(sessionId: number): number | null {
+  const row = db
+    .select({ at: sql<number | null>`max(${setEntry.completedAt})` })
+    .from(setEntry)
+    .innerJoin(sessionExercise, eq(sessionExercise.id, setEntry.sessionExerciseId))
+    .where(eq(sessionExercise.sessionId, sessionId))
+    .get()
+  return row?.at ?? null
+}
+
+/**
+ * Pausa abierta. `isNull` en el where: pausar dos veces (dos taps, dos pantallas) no puede pisar el
+ * `pausedAt` original y regalar el tiempo transcurrido.
+ *
+ * El que llama cancela la notificación de descanso: mientras la sesión está en pausa el descanso
+ * también lo está, y una notificación programada al `restEndsAt` viejo sonaría antes de tiempo.
+ */
+export function pauseSession(id: number): void {
+  db.update(session)
+    .set({ pausedAt: Date.now() })
+    .where(and(eq(session.id, id), isNull(session.pausedAt)))
+    .run()
+}
+
+/**
+ * Cierra la pausa: lo que duró se acumula en `pausedMs` y `pausedAt` vuelve a null.
+ *
+ * ponytail: la pausa **corre el `restEndsAt` hacia adelante** por lo que duró, que es la regla
+ * correcta más barata para "el descanso también se congela" — un campo menos y el countdown sigue
+ * siendo una resta. Techo: durante la pausa el `restEndsAt` guardado miente (apunta al final que
+ * habría tenido sin pausar), así que la UI no debe dibujar el descanso mientras `pausedAt !== null`
+ * y el que llama tiene que reprogramar la notificación con el `restEndsAt` nuevo al reanudar.
+ * Upgrade: guardar el descanso como "restaban N ms" al pausar.
+ */
+export function resumeSession(id: number): void {
+  db.transaction((tx) => {
+    const row = tx.select().from(session).where(eq(session.id, id)).get()
+    if (!row || row.pausedAt === null) return
+    const paused = Math.max(0, Date.now() - row.pausedAt)
+    // Solo se corre el descanso que seguía vivo al pausar. Uno ya vencido (se terminó con la
+    // pantalla desmontada, o `restSec` era 0) se limpia: correrlo lo resucitaría en el futuro y
+    // aparecería una barra de descanso salida de la nada, con notificación incluida.
+    const rest = row.restEndsAt !== null && row.restEndsAt > row.pausedAt ? row.restEndsAt : null
+    tx.update(session)
+      .set({
+        pausedMs: row.pausedMs + paused,
+        pausedAt: null,
+        restEndsAt: rest === null ? null : rest + paused,
+      })
+      .where(eq(session.id, id))
+      .run()
+  })
 }
 
 /**
@@ -205,8 +282,19 @@ export function endSession(id: number): void {
         .run()
     }
 
+    // Terminar con la sesión en pausa cierra la pausa: si no, `pausedAt` queda abierto para siempre
+    // y la duración del historial descontaría hasta el infinito.
+    const now = Date.now()
+    const row = tx.select().from(session).where(eq(session.id, id)).get()
     tx.update(session)
-      .set({ endedAt: Date.now(), restEndsAt: null })
+      .set({
+        endedAt: now,
+        restEndsAt: null,
+        pausedAt: null,
+        pausedMs: row
+          ? row.pausedMs + (row.pausedAt === null ? 0 : Math.max(0, now - row.pausedAt))
+          : 0,
+      })
       .where(eq(session.id, id))
       .run()
   })

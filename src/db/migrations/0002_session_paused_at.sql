@@ -1,0 +1,1 @@
+ALTER TABLE `session` ADD `paused_at` integer;
