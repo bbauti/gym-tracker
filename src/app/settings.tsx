@@ -1,3 +1,4 @@
+import { router } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { Children, type ReactNode, useState } from 'react'
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, View } from 'react-native'
@@ -247,6 +248,14 @@ const rpeItems = [
 
 const rpeLabel = { rpe: t('session.rpe'), rir: t('session.rir'), none: t('settings.rpeNone') }
 
+const sexItems = [
+  { key: 'm', label: t('settings.sexM') },
+  { key: 'f', label: t('settings.sexF') },
+  { key: 'unset', label: t('settings.sexUnset') },
+]
+
+const sexLabel = { m: t('settings.sexM'), f: t('settings.sexF') }
+
 // El descanso por defecto de la app; cada ejercicio puede pisarlo con el suyo (exercise/[id]).
 const REST_CHOICES = [60, 90, 120, 180]
 const restItems = REST_CHOICES.map((n) => ({ key: String(n), label: t('settings.seconds', { n }) }))
@@ -377,6 +386,23 @@ export default function SettingsScreen() {
             onSelect={(key) => updateSettings({ defaultRestSec: Number(key) })}
             value={t('settings.seconds', { n: settings.defaultRestSec })}
           />
+          {/* Solo lo usan Wilks y DOTS (J09); por eso puede quedar sin elegir. */}
+          <PickerRow
+            items={sexItems}
+            label={t('settings.sex')}
+            onSelect={(key) => updateSettings({ sex: key === 'unset' ? null : (key as 'm' | 'f') })}
+            value={settings.sex ? sexLabel[settings.sex] : t('settings.sexUnset')}
+          />
+        </Section>
+
+        <Section title={t('settings.tools')}>
+          <ListRow
+            chevron
+            onPress={() => router.push('/calculators')}
+            title={t('settings.calculators')}
+          />
+          <ListRow chevron onPress={() => router.push('/gyms')} title={t('settings.gyms')} />
+          <ListRow chevron onPress={() => router.push('/body')} title={t('settings.body')} />
         </Section>
 
         {/* Exportar abre la hoja de compartir: esa hoja ES el feedback. shareAsync también resuelve

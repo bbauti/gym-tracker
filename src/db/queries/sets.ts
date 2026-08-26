@@ -55,6 +55,32 @@ export function addSet(seId: number): number {
   })
 }
 
+/**
+ * J06: las series de entrada en calor entran ARRIBA de las que ya estaban, no al final. Un solo
+ * write: correr el orden de las existentes y meter las nuevas van en la misma transacción, o entre
+ * las dos queda un `order_index` duplicado que la pantalla dibujaría mezclado.
+ */
+export function addWarmupSets(seId: number, rows: Array<{ weightG: number; reps: number }>): void {
+  if (rows.length === 0) return
+  db.transaction((tx) => {
+    tx.update(setEntry)
+      .set({ orderIndex: sql`${setEntry.orderIndex} + ${rows.length}` })
+      .where(eq(setEntry.sessionExerciseId, seId))
+      .run()
+    tx.insert(setEntry)
+      .values(
+        rows.map((row, i) => ({
+          sessionExerciseId: seId,
+          orderIndex: i,
+          kind: 'warmup' as const,
+          weightG: row.weightG,
+          reps: row.reps,
+        })),
+      )
+      .run()
+  })
+}
+
 export function getSet(setId: number): SetRow | null {
   return db.select().from(setEntry).where(eq(setEntry.id, setId)).get() ?? null
 }
@@ -162,6 +188,10 @@ export function restoreSet(row: SetRow): void {
 /**
  * The ghost values: every completed set of the last time this exercise was trained, in a *different*
  * session. Two round trips — find the session_exercise, then read its sets.
+ *
+ * Sin entradas en calor: la pantalla alinea los fantasmas por posición y las rampas no son las
+ * mismas de una semana a la otra (se agregan a mano, a mitad de sesión). Contra series de trabajo
+ * la posición sí significa lo mismo.
  */
 export function prevSets(exerciseId: number, excludeSessionId: number): SetRow[] {
   const previous = db
@@ -194,7 +224,13 @@ export function prevSets(exerciseId: number, excludeSessionId: number): SetRow[]
   return db
     .select()
     .from(setEntry)
-    .where(and(eq(setEntry.sessionExerciseId, previous.id), isNotNull(setEntry.completedAt)))
+    .where(
+      and(
+        eq(setEntry.sessionExerciseId, previous.id),
+        isNotNull(setEntry.completedAt),
+        ne(setEntry.kind, 'warmup'),
+      ),
+    )
     .orderBy(asc(setEntry.orderIndex), asc(setEntry.id))
     .all()
 }

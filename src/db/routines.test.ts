@@ -19,6 +19,7 @@ for (const file of [
   '0003_set_targets.sql',
   '0004_session_rest.sql',
   '0005_progression.sql',
+  '0006_tools.sql',
 ]) {
   const sql = readFileSync(join(import.meta.dir, 'migrations', file), 'utf8')
   for (const statement of sql.split('--> statement-breakpoint')) {

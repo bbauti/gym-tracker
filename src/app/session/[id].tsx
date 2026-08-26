@@ -13,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { exerciseName } from '@/db/queries/exercises'
+import { activeGym } from '@/db/queries/gyms'
 import { getRoutineDay } from '@/db/queries/routines'
 import {
   clearRest,
@@ -32,6 +33,7 @@ import {
 } from '@/db/queries/session'
 import {
   addSet,
+  addWarmupSets,
   completeSet,
   deleteSet,
   prevSets,
@@ -41,10 +43,12 @@ import {
   updateSet,
 } from '@/db/queries/sets'
 import { getSettings, type Settings } from '@/db/queries/settings'
+import { sessionVolume } from '@/db/queries/stats'
 import { SET_KINDS, type SetKind } from '@/db/schema'
 import { type Field, type Focus, fieldsFor, type NumKey } from '@/db/types'
 import { useQuery } from '@/db/useQuery'
-import { locale, t } from '@/i18n'
+import { locale, plural, t } from '@/i18n'
+import { DEFAULT_BAR_G, DEFAULT_PLATES_G } from '@/lib/plates'
 import type { PrKind } from '@/lib/prs'
 import { adjustRestEndsAt, elapsedMs } from '@/lib/rest'
 import {
@@ -55,7 +59,9 @@ import {
   parseWeight,
   type Unit,
 } from '@/lib/units'
+import { warmupRamp } from '@/lib/warmup'
 import { cancelRestEnd, scheduleRestEnd } from '@/notifications'
+import { MAX_CARD_EXERCISES, shareSession } from '@/share'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
@@ -66,7 +72,7 @@ import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
 import RestTimer, { useNow } from '@/ui/RestTimer'
 import SetRow, { fieldLabel, fieldNumber, ghostNumber, hasValue, SET_COLUMNS } from '@/ui/SetRow'
-import Sortable from '@/ui/Sortable'
+import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
@@ -96,6 +102,12 @@ const CTA_FADE = FadeIn.duration(Timing.fast.duration).easing(Timing.fast.easing
 // El orden es el mismo criterio que en `SET_MENU`: primero lo que más se usa (ver ui/Menu.tsx).
 const EXERCISE_MENU: MenuItem[] = [
   { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
+  {
+    key: 'warmup',
+    label: t('session.exerciseMenu.warmup'),
+    md: 'local_fire_department',
+    sf: 'flame',
+  },
   {
     key: 'feedback',
     label: t('session.exerciseMenu.feedback'),
@@ -223,6 +235,37 @@ function columnPatch(field: Field, from: Row): SetPatch {
   }
 }
 
+const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'long' })
+
+/** Más peso gana; a igual peso, más repeticiones; y si el ejercicio no lleva peso, más tiempo. */
+function better(a: Row, b: Row): boolean {
+  const weight = (a.weightG ?? 0) - (b.weightG ?? 0)
+  if (weight !== 0) return weight > 0
+  const reps = (a.reps ?? 0) - (b.reps ?? 0)
+  if (reps !== 0) return reps > 0
+  return (a.durationMs ?? a.distanceMm ?? 0) > (b.durationMs ?? b.distanceMm ?? 0)
+}
+
+/**
+ * La mejor serie del ejercicio en una línea ("100 kg × 8"), para la imagen que se comparte. `null`
+ * cuando no se completó nada: un ejercicio sin series hechas no entra en la tarjeta.
+ *
+ * Con unidad, a diferencia de la tabla de la pantalla: la imagen se mira fuera de la app y ahí no
+ * hay encabezado de columna que diga si son kg o lb.
+ */
+function bestLine(sets: Row[], unit: Unit): string | null {
+  let best: Row | null = null
+  for (const set of sets) {
+    if (set.completedAt === null || set.kind === 'warmup') continue
+    if (best === null || better(set, best)) best = set
+  }
+  if (best === null) return null
+  const weight = best.weightG === null ? null : formatWeight(best.weightG, unit, locale)
+  if (weight !== null && best.reps !== null) return `${weight} × ${best.reps}`
+  if (best.reps !== null) return `${best.reps} ${t('session.reps')}`
+  return weight ?? (best.durationMs === null ? null : formatDuration(best.durationMs))
+}
+
 type Found = { ex: SessionTree['exercises'][number]; set: Row; index: number }
 
 function findSet(tree: SessionTree, setId: number): Found | null {
@@ -231,6 +274,26 @@ function findSet(tree: SessionTree, setId: number): Found | null {
     if (index >= 0) return { ex, index, set: ex.sets[index] }
   }
   return null
+}
+
+/**
+ * El fantasma de una fila. Los ghosts (`prevSets`, ya sin entradas en calor) se alinean por posición
+ * ENTRE LAS SERIES DE TRABAJO, no por índice absoluto: una rampa agregada a mitad de sesión mete
+ * filas arriba y correría a todas las de trabajo contra el fantasma de otra serie (o contra ninguno,
+ * y sin él tildar dejaría de heredar las reps de la vez anterior).
+ */
+/** Índice 0-based para etiquetar cada serie: trabajo y calentamiento llevan cuentas separadas. */
+function ordinalsOf(sets: Row[]): number[] {
+  let work = 0
+  let warm = 0
+  return sets.map((s) => (s.kind === 'warmup' ? warm++ : work++))
+}
+
+function ghostFor(sets: Row[], index: number, ghosts: Row[]): Row | null {
+  if (sets[index]?.kind === 'warmup') return null
+  let work = 0
+  for (let i = 0; i < index; i++) if (sets[i].kind !== 'warmup') work++
+  return ghosts[work] ?? null
 }
 
 /** El paso de −/+ del campo. `null` = ese campo no tiene stepper (duración, distancia). */
@@ -494,7 +557,7 @@ export default function SessionScreen() {
       putOpen(false)
       return
     }
-    const ghost = prevs.get(target.ex.se.id)?.[target.index] ?? null
+    const ghost = ghostFor(target.ex.sets, target.index, prevs.get(target.ex.se.id) ?? [])
     const unit = config.unit
     const field = at.field
     switch (k) {
@@ -575,7 +638,7 @@ export default function SessionScreen() {
     // peso que sugirió la rutina primero, después lo de la vez anterior. Lo tipeado pisa a los dos.
     // Un solo write.
     const fill: SetPatch = {}
-    const prev = prevs.get(ex.se.id)?.[index] ?? null
+    const prev = ghostFor(ex.sets, index, prevs.get(ex.se.id) ?? [])
     const fields = fieldsFor(ex.exercise.metric)
     for (const field of fields) {
       if (hasValue(field, set)) continue
@@ -675,6 +738,39 @@ export default function SessionScreen() {
       router.push({ params: { seId }, pathname: '/feedback' })
       return
     }
+    // J06. La rampa se calcula con la barra y los discos del gimnasio activo y las series entran
+    // ARRIBA de las que ya están. Es una sugerencia aplicada a mano por el usuario (§2.2): la app no
+    // las pone sola al precargar el día.
+    if (key === 'warmup') {
+      const now = live.current.tree
+      const ex = now?.exercises.find((e) => e.se.id === seId)
+      if (!ex) return
+      const work = ex.sets.find((s) => s.kind !== 'warmup')
+      const ghost = live.current.ghosts.get(seId) ?? []
+      const workG =
+        work?.weightG ??
+        work?.suggestedWeightG ??
+        ghost.find((g) => g.weightG !== null)?.weightG ??
+        null
+      const gym = activeGym()
+      const rows =
+        workG === null
+          ? []
+          : warmupRamp(workG, {
+              barG: gym?.barsG?.[0]?.g ?? DEFAULT_BAR_G,
+              // Apagar todos los chips deja `[]`, que no carga nada: es la tabla por defecto.
+              platesG: gym?.platesG?.length ? gym.platesG : DEFAULT_PLATES_G,
+            })
+      // Sin peso de trabajo (o con la barra pelada) no hay rampa que armar, y un menú que no hace
+      // nada se lee como un bug.
+      if (rows.length === 0) {
+        haptic('error')
+        toast.show({ text: t('session.warmupNeedWeight') })
+        return
+      }
+      addWarmupSets(seId, rows)
+      return
+    }
     if (key === 'swap') {
       router.push({ params: { seId }, pathname: '/pick-exercise' })
       return
@@ -695,10 +791,56 @@ export default function SessionScreen() {
     })
   }
 
+  // N01. La tarjeta se arma con lo que ya está en pantalla; el volumen es la única query (la misma
+  // que usa Historial, así que el número coincide). Se dibuja fuera de pantalla y no bloquea nada:
+  // si el dispositivo no puede compartir, el aviso va al toast.
+  const shareCard = () => {
+    const now = live.current.tree
+    if (!now) return
+    const { unit } = live.current.settings
+    const s = now.session
+    const lines = now.exercises
+      .map((ex) => ({ detail: bestLine(ex.sets, unit), name: exerciseName(ex.exercise, locale) }))
+      .filter((line): line is { detail: string; name: string } => line.detail !== null)
+    const prs = now.exercises.reduce((n, ex) => n + ex.sets.filter((set) => set.isPr).length, 0)
+    const rest = lines.length - MAX_CARD_EXERCISES
+    const stats = [
+      {
+        label: t('history.duration'),
+        value: formatDuration(
+          elapsedMs(s.startedAt, s.pausedMs, s.pausedAt, s.endedAt ?? Date.now()),
+        ),
+      },
+      {
+        label: t('progress.volume'),
+        value: formatWeight(sessionVolume(sessionId).volumeG, unit, locale, {
+          maxFractionDigits: 0,
+        }),
+      },
+    ]
+    // Sin récords no se dibuja la columna: un "0" grande es la lectura más fría de la tarjeta.
+    if (prs > 0) stats.push({ label: t('pr.history'), value: String(prs) })
+    shareSession({
+      date: dateFormat.format(new Date(s.startedAt)),
+      exercises: lines.slice(0, MAX_CARD_EXERCISES),
+      footer: t('share.footer'),
+      more:
+        rest > 0
+          ? `+${plural(rest, t('history.exercises.one', { n: rest }), t('history.exercises.other', { n: rest }))}`
+          : null,
+      stats,
+      title: s.name ?? t('session.untitled'),
+    }).catch(() => toast.show({ text: t('share.unavailable') }))
+  }
+
   const handleHeaderMenu = (key: string) => {
     // Lo primero: confirmar lo que estaba a medio tipear. Terminar con el numpad abierto barría la
     // serie recién escrita (y con ella el ejercicio, si era la única).
     blur()
+    if (key === 'share') {
+      shareCard()
+      return
+    }
     if (key === 'edit') {
       router.push({ params: { id: sessionId }, pathname: '/session-edit' })
       return
@@ -759,6 +901,7 @@ export default function SessionScreen() {
           sf: paused ? 'play.circle' : 'pause.circle',
         },
         { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
+        { key: 'share', label: t('session.menu.share'), md: 'share', sf: 'square.and.arrow.up' },
         {
           destructive: true,
           key: 'discard',
@@ -768,6 +911,8 @@ export default function SessionScreen() {
         },
       ]
     : [
+        // Terminado, compartir es lo primero que se hace con el entrenamiento.
+        { key: 'share', label: t('session.menu.share'), md: 'share', sf: 'square.and.arrow.up' },
         { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
         { destructive: true, key: 'discard', label: t('common.delete'), md: 'delete', sf: 'trash' },
       ]
@@ -849,7 +994,7 @@ export default function SessionScreen() {
             enabled={!open}
             keyExtractor={keyOfExercise}
             onReorder={(keys) => reorderExercises(sessionId, keys.map(Number))}
-            renderItem={(item) => {
+            renderItem={(item, _index, a11y) => {
               // Solo la card enfocada ve cambiar el draft: las demás reciben siempre las mismas
               // props y el compilador les devuelve el árbol cacheado, sin re-renderizar sus filas.
               const here = open && pad !== null && item.sets.some((s) => s.id === pad.setId)
@@ -857,6 +1002,7 @@ export default function SessionScreen() {
                 // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
                 <Animated.View entering={fadeIn(item.se.id)} style={styles.cardSlot}>
                   <ExerciseCard
+                    a11y={a11y}
                     draft={here ? draft : ''}
                     focus={here ? pad : null}
                     ghosts={ghosts.get(item.se.id) ?? []}
@@ -975,6 +1121,8 @@ type CardProps = {
   prKinds: ReadonlyMap<number, PrKind[]>
   /** Solo viaja hasta el efecto de SetRow, que re-apunta sus shared values al volver del background. */
   resumeKey: number
+  /** Reordenar sin arrastre: van en el botón de la card, que es lo único enfocable del encabezado. */
+  a11y: ReorderActions
 }
 
 function ExerciseCard({
@@ -990,6 +1138,7 @@ function ExerciseCard({
   onMenu,
   prKinds,
   resumeKey,
+  a11y,
 }: CardProps) {
   const { se, exercise, sets } = item
   const name = exerciseName(exercise, locale)
@@ -1015,6 +1164,10 @@ function ExerciseCard({
     se.feedback === null && sets.length > 0 && sets.every((s) => s.completedAt !== null)
   const ctaFade = useEnterFade(askFeedback ? [se.id] : [])
 
+  // Las series se numeran sin contar los calentamientos ("W, W, 1", no "W, W, 3"); los
+  // calentamientos se numeran entre ellos, solo para el lector.
+  const ordinals = ordinalsOf(sets)
+
   return (
     <Card style={styles.card}>
       <View style={styles.cardHeader}>
@@ -1031,6 +1184,7 @@ function ExerciseCard({
         </View>
         <Menu items={EXERCISE_MENU} onSelect={(key) => onMenu(se.id, key)}>
           <View
+            {...a11y}
             accessible
             accessibilityLabel={`${t('common.more')}, ${name}`}
             accessibilityRole="button"
@@ -1089,13 +1243,13 @@ function ExerciseCard({
               draft={focus?.setId === set.id ? draft : ''}
               fields={fields}
               focused={focus?.setId === set.id ? focus.field : null}
-              index={index}
+              index={ordinals[index]}
               locale={locale}
               onComplete={(pageY) => onComplete(set.id, pageY)}
               onFocus={(f, pageY) => onFocus(set.id, f, pageY)}
               onKindPress={() => onSetMenu(set.id)}
               prKinds={prKinds.get(set.id) ?? NO_KINDS}
-              prev={ghosts[index] ?? null}
+              prev={ghostFor(sets, index, ghosts)}
               resumeKey={resumeKey}
               set={set}
               showRpe={settings.rpeMode}

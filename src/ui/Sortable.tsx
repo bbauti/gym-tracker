@@ -1,11 +1,19 @@
 import type { ReactNode } from 'react'
+import type { AccessibilityActionEvent, AccessibilityActionInfo } from 'react-native'
 import Sortables, { type SortableGridProps } from 'react-native-sortables'
+import { t } from '@/i18n'
 import { haptic } from './haptics'
+
+/** Lo que cada ítem cuelga del elemento que ya marca `accessible` para poder reordenar sin gesto. */
+export type ReorderActions = {
+  accessibilityActions: AccessibilityActionInfo[]
+  onAccessibilityAction: (event: AccessibilityActionEvent) => void
+}
 
 type Props<T> = {
   data: T[]
   keyExtractor: (item: T) => string
-  renderItem: (item: T, index: number) => ReactNode
+  renderItem: (item: T, index: number, a11y: ReorderActions) => ReactNode
   onReorder: (orderedKeys: string[]) => void
   enabled?: boolean
   /** Extra al contrato: sin esto no hay auto-scroll al arrastrar contra el borde (§7.3). */
@@ -18,11 +26,10 @@ type Props<T> = {
  * El separador entre ítems va ADENTRO de `renderItem` (padding en el wrapper de la card), no como
  * gap del contenedor: el ítem levantado se mide con su propio alto y el hueco tiene que viajar con él.
  *
- * ponytail: reordenar es SOLO arrastrando. Techo: con VoiceOver/TalkBack o un teclado no hay forma
- * de mover un ítem — el lector se traga el gesto y la librería no expone acciones. Camino de
- * upgrade (auditoría de accesibilidad, fase 7): `accessibilityActions` moveUp/moveDown por ítem en
- * el wrapper de `renderItem`, y su `onAccessibilityAction` arma el nuevo orden de `data` con
- * `keyExtractor` y llama al mismo `onReorder`. Sin cambio de comportamiento para el que arrastra.
+ * Con lector de pantalla el gesto de arrastre no existe, así que cada ítem recibe acciones
+ * moveUp/moveDown que arman el orden nuevo y llaman al mismo `onReorder`. Las acciones se pasan a
+ * `renderItem` en vez de colgarse de un wrapper: las dos plataformas solo ofrecen las acciones del
+ * elemento ENFOCADO, y el foco cae en lo que la card marca `accessible`, nunca en un ancestro.
  */
 export default function Sortable<T>({
   data,
@@ -32,6 +39,26 @@ export default function Sortable<T>({
   enabled = true,
   scrollableRef,
 }: Props<T>) {
+  const move = (from: number, to: number) => {
+    const keys = data.map(keyExtractor)
+    const [key] = keys.splice(from, 1)
+    keys.splice(to, 0, key)
+    haptic('selection')
+    onReorder(keys)
+  }
+  // Fuera de `renderItem`: un objeto nuevo por render le cambiaría las props a todas las cards y
+  // ninguna reusaría su árbol cacheado (de eso vive la sesión mientras se tipea, ver session/[id]).
+  const actions: ReorderActions[] = data.map((_, index) => ({
+    accessibilityActions: [
+      // En los extremos la acción imposible ni se ofrece.
+      ...(index > 0 ? [{ label: t('a11y.moveUp'), name: 'moveUp' }] : []),
+      ...(index < data.length - 1 ? [{ label: t('a11y.moveDown'), name: 'moveDown' }] : []),
+    ],
+    onAccessibilityAction: ({ nativeEvent }) => {
+      if (nativeEvent.actionName === 'moveUp') move(index, index - 1)
+      else if (nativeEvent.actionName === 'moveDown') move(index, index + 1)
+    },
+  }))
   return (
     <Sortables.Grid
       activeItemScale={1.03}
@@ -55,7 +82,7 @@ export default function Sortable<T>({
       }}
       onDragStart={() => haptic('dragStart')}
       onOrderChange={() => haptic('dragSlot')}
-      renderItem={({ index, item }) => renderItem(item, index)}
+      renderItem={({ index, item }) => renderItem(item, index, actions[index])}
       scrollableRef={scrollableRef}
       sortEnabled={enabled}
     />

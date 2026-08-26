@@ -1,6 +1,8 @@
+import { router } from 'expo-router'
 import { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import Animated, { FadeIn } from 'react-native-reanimated'
+import { latest } from '@/db/queries/body'
 import { exerciseName, listExercises, recentExercises } from '@/db/queries/exercises'
 import { listSessions } from '@/db/queries/history'
 import { landmarks, recentMuscleLoad, weeklyHardSets } from '@/db/queries/progression'
@@ -22,14 +24,16 @@ import {
 import { useQuery } from '@/db/useQuery'
 import { locale, plural, t } from '@/i18n'
 import { formatDuration, formatWeight, type Unit } from '@/lib/units'
+import { shareChart } from '@/share'
 import Card from '@/ui/Card'
 import Chip from '@/ui/Chip'
 import EmptyState from '@/ui/EmptyState'
-import ExerciseChart from '@/ui/ExerciseChart'
+import ExerciseChart, { type ChartPoint } from '@/ui/ExerciseChart'
 import Heatmap from '@/ui/Heatmap'
 import ListRow from '@/ui/ListRow'
 import MuscleMap, { topLoaded } from '@/ui/MuscleMap'
 import Text from '@/ui/Text'
+import { toast } from '@/ui/Toast'
 import { colors, radius, spacing } from '@/ui/tokens'
 import VolumeLandmarks from '@/ui/VolumeLandmarks'
 
@@ -81,6 +85,25 @@ const styles = StyleSheet.create({
 const weight = (g: number, unit: Unit) => formatWeight(g, unit, locale)
 /** Una suma de gramos: en lb sin redondear salía "12.480,01 lb" (mismo criterio que Historial). */
 const bulk = (g: number, unit: Unit) => formatWeight(g, unit, locale, { maxFractionDigits: 0 })
+
+const dayFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' })
+
+/**
+ * G19: el gráfico que se está viendo, en un PNG. No bloquea nada — se dispara y sigue; si el
+ * dispositivo no puede compartir (o Skia no da superficie), el aviso va al toast.
+ */
+function shareExerciseChart(data: ChartPoint[], name: string, unit: Unit): void {
+  shareChart({
+    context: { label: t('progress.maxWeight'), values: data.map((p) => p.maxWeightG) },
+    footer: t('share.footer'),
+    format: (g) => formatWeight(g, unit, locale, { withUnit: false }),
+    from: dayFormat.format(new Date(data[0].date)),
+    main: { label: t('progress.e1rm'), values: data.map((p) => p.e1rmG) },
+    title: name,
+    to: dayFormat.format(new Date(data[data.length - 1].date)),
+    unit,
+  }).catch(() => toast.show({ text: t('share.unavailable') }))
+}
 
 function days(n: number): string {
   return plural(n, t('progress.days.one', { n }), t('progress.days.other', { n }))
@@ -198,6 +221,7 @@ function useStats() {
 export default function ProgressScreen() {
   const unit = useQuery(() => getSettings().unit, ['settings'])
   const stats = useStats()
+  const bodyweight = useQuery(() => latest('bodyweight'), ['body_metric'])
   // Recientes primero y después los favoritos que no estén: un ejercicio que no tocás hace dos
   // meses es justo el que querés mirar acá, y por recientes no aparece nunca.
   const pickable = useQuery(() => {
@@ -270,13 +294,16 @@ export default function ProgressScreen() {
       ? (() => {
           const last = points[points.length - 1]
           const diff = last.e1rmG - points[0].e1rmG
+          const name = exerciseName(selected, locale)
           return {
             data: points,
+            // El nombre también titula la imagen compartida (G19).
+            name,
             label: t('progress.chartA11y', {
               delta: `${diff < 0 ? '−' : '+'}${weight(Math.abs(diff), unit)}`,
               last: weight(last.e1rmG, unit),
               n: points.length,
-              name: exerciseName(selected, locale),
+              name,
             }),
           }
         })()
@@ -328,6 +355,24 @@ export default function ProgressScreen() {
             ) : null}
             <BestRow label={t('progress.tonnage')} value={bulk(stats.tonnageG, unit)} />
           </Card>
+          {/* I01. La puerta a Medidas vive acá y no en su propio tab: se carga cada tanto y lo que
+              se mira seguido es el peso corporal, que ya es un número de esta pantalla. */}
+          <View style={styles.group}>
+            <ListRow
+              chevron
+              label={`${t('body.title')}, ${bodyweight ? weight(bodyweight.value, unit) : t('body.empty')}`}
+              onPress={() => router.push('/body')}
+              subtitle={bodyweight ? undefined : t('body.empty')}
+              title={t('body.title')}
+              trailing={
+                bodyweight ? (
+                  <Text color="secondary" tabular>
+                    {weight(bodyweight.value, unit)}
+                  </Text>
+                ) : null
+              }
+            />
+          </View>
         </View>
 
         {volume.length > 0 ? (
@@ -363,7 +408,12 @@ export default function ProgressScreen() {
             </ScrollView>
             <Card style={styles.card}>
               {chart ? (
-                <ExerciseChart data={chart.data} label={chart.label} unit={unit} />
+                <ExerciseChart
+                  data={chart.data}
+                  label={chart.label}
+                  onShare={() => shareExerciseChart(chart.data, chart.name, unit)}
+                  unit={unit}
+                />
               ) : (
                 <Text color="secondary">{t('progress.exerciseEmpty')}</Text>
               )}

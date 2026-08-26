@@ -190,7 +190,7 @@ export default function RoutineScreen() {
             data={days}
             keyExtractor={(item) => String(item.day.id)}
             onReorder={(keys) => reorderDays(routineId, keys.map(Number))}
-            renderItem={(item, index) => {
+            renderItem={(item, index, a11y) => {
               const exerciseCount = item.exercises.length
               const setCount = item.exercises.reduce((n, e) => n + e.sets.length, 0)
               const subtitle = [
@@ -216,6 +216,7 @@ export default function RoutineScreen() {
                   <View style={styles.rowCard}>
                     <View style={styles.hideSeparator}>
                       <ListRow
+                        {...a11y}
                         chevron
                         label={[item.day.name, ...marks, subtitle].join(', ')}
                         onPress={() =>

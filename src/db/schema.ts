@@ -124,6 +124,10 @@ export const settings = sqliteTable(
     deloadUntil: integer('deload_until'),
     deloadDismissedAt: integer('deload_dismissed_at'),
     deloadEndedAt: integer('deload_ended_at'),
+    /** J02: el gimnasio cuyas barras y discos usa la calculadora. `null` = la tabla por defecto. */
+    activeGymId: integer('active_gym_id').references(() => gym.id, { onDelete: 'set null' }),
+    /** Solo lo piden Wilks y DOTS, que tienen coeficientes distintos por sexo (J09). */
+    sex: text('sex', { enum: ['m', 'f'] }),
   },
   (t) => [check('settings_single_row', sql`${t.id} = 1`)],
 )

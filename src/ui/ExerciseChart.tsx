@@ -1,11 +1,13 @@
+import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { CartesianChart, Line } from 'victory-native'
 import { locale, t } from '@/i18n'
 import { gToUnit, type Unit } from '@/lib/units'
 import { useChartTheme } from './chartTheme'
+import PressableScale from './PressableScale'
 import Text from './Text'
-import { spacing } from './tokens'
+import { colors, MIN_TARGET, spacing } from './tokens'
 
 /**
  * Sin `yAxis` victory NO se queda sin eje: `buildChartAxis` cae en `[{ ...YAxisDefaults, yKeys }]`
@@ -39,7 +41,17 @@ function tickFormat(step: number): Intl.NumberFormat {
 }
 
 const styles = StyleSheet.create({
-  legend: { flexDirection: 'row', gap: spacing[4], paddingBottom: spacing[2] },
+  legend: { alignItems: 'center', flexDirection: 'row', paddingBottom: spacing[2] },
+  keys: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: spacing[4] },
+  // 44 pt de blanco tocable arriba de un renglón de 20: el margen negativo devuelve la mitad del
+  // aire al layout (el área de toque no se achica) y la fila de la leyenda no se despega del dibujo.
+  share: {
+    alignItems: 'center',
+    height: MIN_TARGET,
+    justifyContent: 'center',
+    marginVertical: -spacing[2],
+    width: MIN_TARGET,
+  },
   // La unidad va arriba de la columna de ticks: los números del eje quedan pelados y no hay que
   // repetir "kg" tres veces ni arriesgar que se corte con Dynamic Type grande.
   unit: { width: GUTTER, paddingRight: spacing[2], alignItems: 'flex-end' },
@@ -75,6 +87,8 @@ type Props = {
   unit: Unit
   /** El gráfico es UN elemento accesible: acá va el resumen en palabras. */
   label: string
+  /** G19. Sin esto no se dibuja el botón: no todos los gráficos se comparten. */
+  onShare?: () => void
 }
 
 function Key({ color, label }: { color: string; label: string }) {
@@ -105,7 +119,7 @@ function Key({ color, label }: { color: string; label: string }) {
  * Dynamic Type, y las posiciones salen de la escala real del gráfico, no de una copia que se
  * desalinea. La unidad va una sola vez, arriba de la columna.
  */
-export default function ExerciseChart({ data, unit, label }: Props) {
+export default function ExerciseChart({ data, unit, label, onShare }: Props) {
   const theme = useChartTheme()
   const [ticks, setTicks] = useState<Array<{ v: number; y: number; text: string }>>([])
 
@@ -116,96 +130,125 @@ export default function ExerciseChart({ data, unit, label }: Props) {
   }))
 
   return (
-    // Un solo elemento accesible: leyenda, dibujo y fechas adentro. Sueltas, la leyenda daba tres
-    // paradas de VoiceOver ("kg", "1RM est.", "Peso máx.") que sin las marcas no dicen nada.
-    <View accessible accessibilityLabel={label}>
+    <View>
+      {/* La leyenda queda FUERA del bloque accesible porque el botón de compartir vive acá y adentro
+          de un `accessible` VoiceOver no lo alcanza. Sus textos se ocultan a mano: sueltos daban tres
+          paradas ("kg", "1RM est.", "Peso máx.") que sin las marcas no dicen nada, y el resumen del
+          gráfico ya los cuenta. */}
       <View style={styles.legend}>
-        <View style={styles.unit}>
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.keys}
+        >
+          <View style={styles.unit}>
+            <Text color="tertiary" role="caption">
+              {unit}
+            </Text>
+          </View>
+          <Key color={theme.tint} label={t('progress.e1rm')} />
+          <Key color={theme.muted} label={t('progress.maxWeight')} />
+        </View>
+        {onShare ? (
+          <PressableScale
+            accessibilityLabel={t('share.chart')}
+            onPress={onShare}
+            style={styles.share}
+          >
+            <SymbolView
+              fallback={
+                <Text color="tint" role="callout">
+                  ↑
+                </Text>
+              }
+              name={{ ios: 'square.and.arrow.up' as SFSymbol, android: 'share' as AndroidSymbol }}
+              size={20}
+              tintColor={colors.tint}
+            />
+          </PressableScale>
+        ) : null}
+      </View>
+
+      {/* Dibujo y fechas son UN elemento accesible: el resumen en palabras es `label`. */}
+      <View accessible accessibilityLabel={label}>
+        <View style={styles.chart}>
+          <View style={styles.gutter}>
+            {ticks.map(({ v, y, text }) => (
+              // Acotado al alto del gráfico: el rango de la escala es exactamente [0, HEIGHT]
+              // (`domainPadding` corre el dominio, no el rango), así que un tick en el borde ponía la
+              // caja 20 px afuera — recortada arriba, encima de la fila de fechas abajo.
+              <View
+                key={v}
+                style={[
+                  styles.tick,
+                  { top: Math.min(Math.max(0, y - TICK_BOX / 2), HEIGHT - TICK_BOX) },
+                ]}
+              >
+                {/* Tope 1,3 y no el 1,6 del rol: la columna es de ancho fijo y un tick recortado
+                  ("1.10…") es peor que uno un punto más chico. */}
+                <Text
+                  color="tertiary"
+                  maxFontSizeMultiplier={1.3}
+                  numberOfLines={1}
+                  role="caption"
+                  style={styles.tickLabel}
+                  tabular
+                >
+                  {text}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <View style={styles.plot}>
+            <CartesianChart
+              data={points}
+              // left/right: sin eso el primer y el último punto caen justo sobre el borde del canvas
+              // y el trazo de 2 px con punta redonda se corta al medio.
+              domainPadding={{ bottom: 12, left: 4, right: 4, top: 12 }}
+              onScaleChange={(_x: LinearScale, y: LinearScale) => {
+                // d3 ya redondeó el dominio: `ticks` devuelve valores lindos y `y(v)` su píxel exacto.
+                // Se saltean de a un paso CONSTANTE — agarrar primero/medio/último de una lista par
+                // (120/100/80/60 → 120/80/60) dibuja saltos de 40 y de 20 con la misma separación.
+                const values = y.ticks(TICKS)
+                const stride = Math.max(1, Math.ceil(values.length / MAX_TICKS))
+                const picked = values.filter((_, i) => i % stride === 0)
+                const format = tickFormat(picked.length > 1 ? Math.abs(picked[0] - picked[1]) : 0)
+                setTicks(picked.map((v) => ({ text: format.format(v), v, y: y(v) })))
+              }}
+              xKey="date"
+              yAxis={NO_GRID}
+              yKeys={['top', 'e1rm']}
+            >
+              {({ points: p }) => (
+                <>
+                  <Line
+                    color={theme.muted}
+                    points={p.top}
+                    strokeCap="round"
+                    strokeJoin="round"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    color={theme.tint}
+                    points={p.e1rm}
+                    strokeCap="round"
+                    strokeJoin="round"
+                    strokeWidth={2}
+                  />
+                </>
+              )}
+            </CartesianChart>
+          </View>
+        </View>
+
+        <View style={styles.dates}>
           <Text color="tertiary" role="caption">
-            {unit}
+            {dayFormat.format(new Date(data[0].date))}
+          </Text>
+          <Text color="tertiary" role="caption">
+            {dayFormat.format(new Date(data[data.length - 1].date))}
           </Text>
         </View>
-        <Key color={theme.tint} label={t('progress.e1rm')} />
-        <Key color={theme.muted} label={t('progress.maxWeight')} />
-      </View>
-
-      <View style={styles.chart}>
-        <View style={styles.gutter}>
-          {ticks.map(({ v, y, text }) => (
-            // Acotado al alto del gráfico: el rango de la escala es exactamente [0, HEIGHT]
-            // (`domainPadding` corre el dominio, no el rango), así que un tick en el borde ponía la
-            // caja 20 px afuera — recortada arriba, encima de la fila de fechas abajo.
-            <View
-              key={v}
-              style={[
-                styles.tick,
-                { top: Math.min(Math.max(0, y - TICK_BOX / 2), HEIGHT - TICK_BOX) },
-              ]}
-            >
-              {/* Tope 1,3 y no el 1,6 del rol: la columna es de ancho fijo y un tick recortado
-                  ("1.10…") es peor que uno un punto más chico. */}
-              <Text
-                color="tertiary"
-                maxFontSizeMultiplier={1.3}
-                numberOfLines={1}
-                role="caption"
-                style={styles.tickLabel}
-                tabular
-              >
-                {text}
-              </Text>
-            </View>
-          ))}
-        </View>
-        <View style={styles.plot}>
-          <CartesianChart
-            data={points}
-            // left/right: sin eso el primer y el último punto caen justo sobre el borde del canvas
-            // y el trazo de 2 px con punta redonda se corta al medio.
-            domainPadding={{ bottom: 12, left: 4, right: 4, top: 12 }}
-            onScaleChange={(_x: LinearScale, y: LinearScale) => {
-              // d3 ya redondeó el dominio: `ticks` devuelve valores lindos y `y(v)` su píxel exacto.
-              // Se saltean de a un paso CONSTANTE — agarrar primero/medio/último de una lista par
-              // (120/100/80/60 → 120/80/60) dibuja saltos de 40 y de 20 con la misma separación.
-              const values = y.ticks(TICKS)
-              const stride = Math.max(1, Math.ceil(values.length / MAX_TICKS))
-              const picked = values.filter((_, i) => i % stride === 0)
-              const format = tickFormat(picked.length > 1 ? Math.abs(picked[0] - picked[1]) : 0)
-              setTicks(picked.map((v) => ({ text: format.format(v), v, y: y(v) })))
-            }}
-            xKey="date"
-            yAxis={NO_GRID}
-            yKeys={['top', 'e1rm']}
-          >
-            {({ points: p }) => (
-              <>
-                <Line
-                  color={theme.muted}
-                  points={p.top}
-                  strokeCap="round"
-                  strokeJoin="round"
-                  strokeWidth={2}
-                />
-                <Line
-                  color={theme.tint}
-                  points={p.e1rm}
-                  strokeCap="round"
-                  strokeJoin="round"
-                  strokeWidth={2}
-                />
-              </>
-            )}
-          </CartesianChart>
-        </View>
-      </View>
-
-      <View style={styles.dates}>
-        <Text color="tertiary" role="caption">
-          {dayFormat.format(new Date(data[0].date))}
-        </Text>
-        <Text color="tertiary" role="caption">
-          {dayFormat.format(new Date(data[data.length - 1].date))}
-        </Text>
       </View>
     </View>
   )

@@ -26,7 +26,7 @@ import { haptic } from '@/ui/haptics'
 import Menu, { type MenuItem } from '@/ui/Menu'
 import { RowLayout, useEnterFade } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
-import Sortable from '@/ui/Sortable'
+import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
@@ -260,10 +260,11 @@ export default function RoutineDayScreen() {
             data={exercises}
             keyExtractor={keyOfExercise}
             onReorder={(keys) => reorderRoutineExercises(dayId, keys.map(Number))}
-            renderItem={(item) => (
+            renderItem={(item, _index, a11y) => (
               // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
               <Animated.View entering={fadeIn(item.re.id)} style={styles.cardSlot}>
                 <ExerciseCard
+                  a11y={a11y}
                   item={item}
                   onDeleteSet={handleDeleteSet}
                   onMenu={handleExerciseMenu}
@@ -289,9 +290,11 @@ type CardProps = {
   item: ExerciseEntry
   onMenu: (reId: number, key: string) => void
   onDeleteSet: (setId: number) => void
+  /** Reordenar sin arrastre: van en el botón de la card, que es lo único enfocable del encabezado. */
+  a11y: ReorderActions
 }
 
-function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
+function ExerciseCard({ item, onMenu, onDeleteSet, a11y }: CardProps) {
   const { re, exercise, sets } = item
   const name = exerciseName(exercise, locale)
   // Las series que ya estaban no animan; la que agregás y la que vuelve con Deshacer, sí. Una card
@@ -313,6 +316,7 @@ function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
         </View>
         <Menu items={EXERCISE_MENU} onSelect={(key) => onMenu(re.id, key)}>
           <View
+            {...a11y}
             accessible
             accessibilityLabel={`${t('common.more')}, ${name}`}
             accessibilityRole="button"
