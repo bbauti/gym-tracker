@@ -3,10 +3,10 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
 import { Platform, StyleSheet, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getSession, updateSession } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
@@ -43,7 +43,7 @@ const styles = StyleSheet.create({
 export default function SessionEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const sessionId = Number(id)
-  const insets = useSafeAreaInsets()
+  const bottom = useSheetBottomInset()
 
   // `tables: []` a propósito: es un formulario. Si la fila se refrescara sola mientras se escribe,
   // el draft se pisaría solo. Lo que se guarda se escribe en Listo y la hoja se cierra.
@@ -74,10 +74,12 @@ export default function SessionEditScreen() {
   return (
     <KeyboardAvoidingView
       // `automaticOffset` mide la posición real en pantalla: sin eso la hoja cree que está arriba
-      // de todo y decide que el teclado no la tapa.
+      // de todo y decide que el teclado no la tapa. En Android va apagada y el hueco lo pone el
+      // padding de abajo (ver `src/ui/keyboard.ts`).
       automaticOffset
       behavior="padding"
-      style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}
+      enabled={KAV_ENABLED}
+      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
     >
       <View style={styles.header}>
         <Text accessibilityRole="header" role="headline">

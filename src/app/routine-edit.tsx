@@ -2,11 +2,11 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, Switch, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { getRoutineDay, getRoutineTree, updateDay, updateRoutine } from '@/db/queries/routines'
+import { getRoutine, getRoutineDay, updateDay, updateRoutine } from '@/db/queries/routines'
 import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
 import { haptic } from '@/ui/haptics'
+import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
@@ -51,21 +51,16 @@ export default function RoutineEditScreen() {
   const { id, dayId } = useLocalSearchParams<{ id?: string; dayId?: string }>()
   const routineId = id ? Number(id) : null
   const numericDayId = dayId ? Number(dayId) : null
-  const insets = useSafeAreaInsets()
+  const bottom = useSheetBottomInset()
 
   const day = useQuery(
     () => (numericDayId === null ? null : getRoutineDay(numericDayId)),
     NO_TABLES,
     [numericDayId],
   )
-  // ponytail: para la rutina no hay un `getRoutine`, así que se pide el árbol entero (4 queries)
-  // para leer un nombre. Techo: una hoja que se abre a mano paga 3 queries de más. Upgrade:
-  // `getRoutine(id)` en db/queries/routines.ts.
-  const routine = useQuery(
-    () => (routineId === null ? null : (getRoutineTree(routineId)?.routine ?? null)),
-    NO_TABLES,
-    [routineId],
-  )
+  const routine = useQuery(() => (routineId === null ? null : getRoutine(routineId)), NO_TABLES, [
+    routineId,
+  ])
 
   const row = day ?? routine
   const [name, setName] = useState(row?.name ?? '')
@@ -75,19 +70,37 @@ export default function RoutineEditScreen() {
 
   function save() {
     const trimmed = name.trim()
-    // Un nombre vacío no borra el que había: se guarda el resto y listo.
-    if (day) updateDay(day.id, trimmed ? { isDeload: deload, name: trimmed } : { isDeload: deload })
-    else if (routine && trimmed) updateRoutine(routine.id, { name: trimmed })
+    // Un nombre vacío no borra el que había: se cierra y listo.
+    if (trimmed) {
+      if (day) updateDay(day.id, { name: trimmed })
+      else if (routine) updateRoutine(routine.id, { name: trimmed })
+    }
     router.back()
+  }
+
+  /**
+   * El switch se guarda al tocarlo y no en Listo: la hoja también se cierra arrastrándola, y ahí
+   * un toggle que solo vive en el estado se perdería sin avisar. El nombre no puede hacer lo mismo
+   * (se escribiría letra por letra), por eso tiene su botón.
+   */
+  function toggleDeload() {
+    if (!day) return
+    const next = !deload
+    // El háptico va en el mismo bloque que el cambio de estado (§7.4).
+    haptic('toggle')
+    setDeload(next)
+    updateDay(day.id, { isDeload: next })
   }
 
   return (
     <KeyboardAvoidingView
       // `automaticOffset` mide la posición real en pantalla: sin eso la hoja cree que está arriba
-      // de todo y decide que el teclado no la tapa.
+      // de todo y decide que el teclado no la tapa. En Android va apagada y el hueco lo pone el
+      // padding de abajo (ver `src/ui/keyboard.ts`).
       automaticOffset
       behavior="padding"
-      style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}
+      enabled={KAV_ENABLED}
+      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
     >
       <View style={styles.header}>
         <Text accessibilityRole="header" role="headline">
@@ -106,7 +119,10 @@ export default function RoutineEditScreen() {
         </Text>
         <TextInput
           accessibilityLabel={day ? t('day.name') : t('routine.name')}
-          autoFocus
+          // Solo la rutina abre con el teclado puesto: la hoja del día también tiene el switch de
+          // deload, y con `fitToContents` el teclado le caía justo encima. Renombrar arranca con un
+          // toque en el campo; el toggle queda a la vista sin tener que bajar el teclado primero.
+          autoFocus={!day}
           maxFontSizeMultiplier={1.6}
           onChangeText={setName}
           onSubmitEditing={save}
@@ -124,11 +140,7 @@ export default function RoutineEditScreen() {
             accessibilityLabel={t('day.deload')}
             accessibilityRole="switch"
             accessibilityState={{ checked: deload }}
-            onPress={() => {
-              // El háptico va en el mismo bloque que el cambio de estado (§7.4).
-              haptic('toggle')
-              setDeload(!deload)
-            }}
+            onPress={toggleDeload}
             scale={0.98}
             style={styles.toggle}
           >

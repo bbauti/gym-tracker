@@ -7,6 +7,11 @@ import { colors, radius, spacing } from './tokens'
 type Props = {
   title: string
   onPress: () => void
+  /**
+   * Cuando el título no alcanza para saber cuál de todos es. Cinco cards de rutina dan cinco
+   * "Empezar, botón" idénticos, y el cuerpo de la card es otro elemento accesible: no se hereda.
+   */
+  accessibilityLabel?: string
   variant?: 'filled' | 'tinted' | 'plain'
   destructive?: boolean
   disabled?: boolean
@@ -33,6 +38,7 @@ const styles = StyleSheet.create({
 
 export default function Button({
   title,
+  accessibilityLabel,
   onPress,
   variant = 'filled',
   destructive,
@@ -44,7 +50,7 @@ export default function Button({
   const fg = variant === 'filled' ? colors.onTint : accent
   return (
     <PressableScale
-      accessibilityLabel={title}
+      accessibilityLabel={accessibilityLabel ?? title}
       accessibilityState={{ disabled: Boolean(disabled) }}
       disabled={disabled}
       onPress={onPress}

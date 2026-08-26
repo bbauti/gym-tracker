@@ -128,13 +128,17 @@ function ghostOf(
 
 /**
  * El mismo fantasma en número: de ahí arrancan ± y backspace en el numpad.
- * ponytail: el objetivo (un rango) no entra acá. Techo: con "8–12" en fantasma, + da 1 y no 9.
- * Upgrade: arrancar del mínimo cuando la celda está mostrando el objetivo.
+ *
+ * Un rango no tiene un número solo, así que el objetivo entra por su mínimo: con "8–12" en fantasma,
+ * + da 9 y no 1. Esto NO lo aplica — es la base de una tecla que el dedo apretó, y lo que quede en
+ * la celda se sigue confirmando con el tilde (§2.2).
  */
 export function ghostNumber(field: Field, set: Row, prev: Row | null, unit: Unit): number | null {
   if (field === 'weight' && set.suggestedWeightG !== null)
     return Math.round(gToUnit(set.suggestedWeightG, unit) * 100) / 100
-  return fieldNumber(field, prev, unit)
+  const previous = fieldNumber(field, prev, unit)
+  if (previous !== null) return previous
+  return field === 'reps' ? (set.targetRepsMin ?? set.targetRepsMax) : null
 }
 
 export function fieldLabel(field: Field, unit: Unit): string {
@@ -215,7 +219,12 @@ function Cell({ index, field, set, prev, unit, locale, focused, draft, onFocus }
     min !== null && max !== null && min !== max && range !== null
       ? t('session.targetHint', { max, min })
       : null
-  const value = hint === null ? shown : shown === range ? hint : `${shown}, ${hint}`
+  // El fantasma se ve igual pero no se lee igual: en pantalla el gris ya dice "esto todavía no es
+  // tuyo" y el lector no tiene gris, así que ahí lo decimos con palabras. Solo en el anuncio.
+  // `ghost` ya implica que no hay valor propio; falta descartar el draft, que pisa la celda.
+  const isGhost = ghost !== null && !(focused && draft !== '')
+  const announced = isGhost ? t('session.suggested', { value: shown }) : shown
+  const value = hint === null ? announced : shown === range ? hint : `${announced}, ${hint}`
 
   return (
     <View style={styles.slot}>

@@ -164,6 +164,8 @@ export default function RoutineSetScreen() {
       <View style={styles.row}>
         <View style={styles.grow}>
           <Stepper
+            // El guión es para el ojo: el lector dice "Sin RPE objetivo" y no "raya".
+            a11yText={rpe === null ? t('routineSet.clearRpe') : undefined}
             format={rpe === null ? () => EMPTY : rpeFormat.format}
             label={t('routineSet.rpe')}
             max={RPE_HI}
@@ -176,10 +178,15 @@ export default function RoutineSetScreen() {
         {/* ponytail: el "sin RPE" es este botón y no una opción más del stepper. Techo: un target de
             44 pt para algo que se usa poco. Upgrade: swipe sobre el valor, si molesta. */}
         <PressableScale
-          accessibilityLabel={`${t('common.delete')}, ${t('routineSet.rpe')}`}
+          accessibilityLabel={t('routineSet.clearRpe')}
           accessibilityState={{ disabled: rpe === null }}
           disabled={rpe === null}
-          onPress={() => changeRpe(null)}
+          onPress={() => {
+            // El háptico va en el mismo bloque que el cambio (§7.4): el Stepper ya lo hace en ±,
+            // apagarlo es el único cambio de valor de la hoja que no sonaba.
+            haptic('selection')
+            changeRpe(null)
+          }}
           style={[styles.clear, rpe === null && styles.disabled]}
         >
           <Text color="tint" role="headline">

@@ -4,7 +4,6 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
 import { Alert, AppState, Dimensions, StyleSheet, View } from 'react-native'
 import Animated, {
-  FadeIn,
   useAnimatedRef,
   useAnimatedStyle,
   useScrollViewOffset,
@@ -13,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { exerciseName } from '@/db/queries/exercises'
+import { getRoutineDay } from '@/db/queries/routines'
 import {
   clearRest,
   deleteSession,
@@ -59,7 +59,7 @@ import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
 import Menu, { type MenuItem, showMenu } from '@/ui/Menu'
-import { RowLayout, Spring } from '@/ui/motion'
+import { RowLayout, Spring, useEnterFade } from '@/ui/motion'
 import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
 import RestTimer, { useNow } from '@/ui/RestTimer'
@@ -74,6 +74,8 @@ const SESSION_TABLES = ['session', 'session_exercise', 'set_entry', 'exercise']
 const SETTINGS_TABLES = ['settings']
 /** El descanso arranca en la última serie completada: el MAX(completed_at) es el único dato nuevo. */
 const REST_TABLES = ['set_entry']
+/** D11: el día de rutina se puede marcar/desmarcar como deload mientras la sesión está abierta. */
+const ROUTINE_DAY_TABLES = ['routine_day']
 /** Los ghosts son de sesiones anteriores: no cambian mientras entrenás. */
 const NO_TABLES: string[] = []
 const KEEP_AWAKE_TAG = 'gym-session'
@@ -84,13 +86,6 @@ const PAD_GUESS = 400
 const SCREEN_H = Dimensions.get('window').height
 /** Lo que tiene que quedar libre bajo el dedo al enfocar: la fila entera (56) y un respiro. */
 const ROW_CLEARANCE = 56 + spacing[4]
-// ponytail: el ToastHost es un overlay del layout raíz y se dibuja SOBRE el numpad, así que
-// mientras está puesto tapa (y se come los taps de) la última fila de teclas — el 0 y el ✓, justo
-// lo que hay que tocar después de este aviso. Por eso dura 2 s y no los 4 s del default (con lector
-// de pantalla el ToastHost lo triplica solo). Techo: dos segundos de tecla muerta.
-// Upgrade: que ToastHost acepte un inset de abajo y la pantalla le pase `padHeight`.
-const NEED_REPS_TOAST_MS = 2000
-
 const EXERCISE_MENU: MenuItem[] = [
   { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
   {
@@ -128,6 +123,15 @@ const styles = StyleSheet.create({
   content: { padding: spacing[4] },
   cardSlot: { paddingBottom: spacing[4] },
   empty: { marginBottom: spacing[4], minHeight: 240 },
+  // Mismo aviso que en el editor del día (app/routine-day/[id].tsx), acá arriba de los ejercicios.
+  deload: {
+    backgroundColor: colors.fill,
+    borderRadius: radius.md,
+    gap: spacing[1],
+    marginBottom: spacing[4],
+    overflow: 'hidden',
+    padding: spacing[3],
+  },
   card: { gap: spacing[2] },
   cardHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
   cardTitle: { flex: 1 },
@@ -291,9 +295,21 @@ export default function SessionScreen() {
   const insets = useSafeAreaInsets()
   // El inicio del descanso es derivable: la última serie completada de la sesión. Sin columna nueva.
   const restStartedAt = useQuery(() => lastCompletedAt(sessionId), REST_TABLES, [sessionId])
+  // D11: el consejo del deload ("bajá el peso, no las series") sirve donde se levanta el peso, no
+  // solo en la pantalla donde se planifica. Sale del join que ya existe (`session.routine_day_id`):
+  // sin columna nueva en `session` y sin copiar el flag al empezar.
+  const routineDayId = tree?.session.routineDayId ?? null
+  const deload = useQuery(
+    () => (routineDayId === null ? false : (getRoutineDay(routineDayId)?.isDeload ?? false)),
+    ROUTINE_DAY_TABLES,
+    [routineDayId],
+  )
   // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
   const scrollRef = useAnimatedRef<Animated.ScrollView>()
   const offset = useScrollViewOffset(scrollRef)
+  // Solo la card recién agregada entra con fade: abrir una sesión vieja con 6 ejercicios no es una
+  // entrada, es una pantalla que ya estaba (mismo motivo que el tilde de `ui/SetRow`).
+  const fadeIn = useEnterFade((tree?.exercises ?? []).map((e) => e.se.id))
 
   // Un solo read por lista de ejercicios: el numpad (±, plates) y completar necesitan los ghosts,
   // y un useQuery por card no se puede leer desde acá. La clave encierra todo lo que `run` usa.
@@ -555,12 +571,17 @@ export default function SessionScreen() {
     // con el numpad ya puesto sobre las reps, que es lo único que falta para poder tildarla.
     if (fields.includes('reps') && (set.reps ?? fill.reps ?? null) === null) {
       haptic('error')
-      toast.show({ duration: NEED_REPS_TOAST_MS, text: t('session.needReps') })
+      // El ToastHost es un overlay del layout raíz y se dibuja SOBRE el numpad: sin el inset taparía
+      // (y se comería los taps de) la última fila de teclas, que es justo lo que este aviso pide
+      // tocar. `padHeight` ya está medido — el numpad se monta con la pantalla, aunque esté abajo.
+      toast.show({ bottom: live.current.padHeight, text: t('session.needReps') })
       focusOn(setId, 'reps', pageY)
       return
     }
     const last = ex.sets.every((s) => s.id === setId || s.completedAt !== null)
-    const restSec = ex.exercise.defaultRestSec ?? config.defaultRestSec
+    // El descanso que pedía la rutina primero (copiado a la fila al pre-cargar el día, D07), después
+    // el del ejercicio y por último el de ajustes.
+    const restSec = ex.se.restSec ?? ex.exercise.defaultRestSec ?? config.defaultRestSec
     haptic(last ? 'exerciseDone' : 'setComplete')
     completeSet(setId, sessionId, fill, restSec)
     // Contra el `rest_ends_at` que acabó de escribir `completeSet` (guarda su propio `now` adentro de
@@ -769,6 +790,16 @@ export default function SessionScreen() {
           pausedMs={row.pausedMs}
           startedAt={row.startedAt}
         />
+        {deload ? (
+          <View style={styles.deload}>
+            <Text color="tint" role="headline">
+              {t('day.deload')}
+            </Text>
+            <Text color="secondary" role="footnote">
+              {t('day.deloadHint')}
+            </Text>
+          </View>
+        ) : null}
         {tree.exercises.length === 0 ? (
           <View style={styles.empty}>
             <EmptyState
@@ -790,7 +821,7 @@ export default function SessionScreen() {
               const here = open && pad !== null && item.sets.some((s) => s.id === pad.setId)
               return (
                 // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
-                <Animated.View entering={FadeIn.duration(200)} style={styles.cardSlot}>
+                <Animated.View entering={fadeIn(item.se.id)} style={styles.cardSlot}>
                   <ExerciseCard
                     draft={here ? draft : ''}
                     focus={here ? pad : null}
@@ -924,6 +955,9 @@ function ExerciseCard({
 }: CardProps) {
   const { se, exercise, sets } = item
   const name = exerciseName(exercise, locale)
+  // Las filas que ya estaban al montar la card no animan: un día de rutina precarga sus series y
+  // abrir el entrenamiento serían 20 fades a la vez. La que agregás y la que vuelve con Deshacer, sí.
+  const fadeIn = useEnterFade(sets.map((s) => s.id))
   const fields = fieldsFor(exercise.metric)
   const extra = settings.rpeMode === 'none' ? null : settings.rpeMode
 
@@ -990,7 +1024,7 @@ function ExerciseCard({
       {sets.map((set, index) => (
         // `entering` para que una serie restaurada (deshacer) o recién agregada no aparezca de la
         // nada mientras las de abajo bajan con RowLayout (§7.1).
-        <Animated.View entering={FadeIn.duration(200)} key={set.id} layout={RowLayout}>
+        <Animated.View entering={fadeIn(set.id)} key={set.id} layout={RowLayout}>
           <SwipeRow onDelete={() => onDeleteSet(set.id)}>
             <SetRow
               draft={focus?.setId === set.id ? draft : ''}

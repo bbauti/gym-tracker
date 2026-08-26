@@ -21,6 +21,12 @@ type ToastOptions = {
   actionLabel?: string
   onAction?: () => void
   duration?: number
+  /**
+   * Cuánto subirlo por encima del safe area. El host es un overlay del layout raíz y se dibuja sobre
+   * todo, así que una pantalla con algo fijo abajo (el numpad de la sesión) le pasa ese alto para no
+   * quedar tapada — y sobre todo para no comerse los taps de las teclas que hay debajo.
+   */
+  bottom?: number
 }
 type ToastItem = ToastOptions & { id: number }
 
@@ -238,7 +244,11 @@ export function ToastHost() {
       <GestureDetector gesture={pan}>
         <Animated.View
           accessibilityLiveRegion="polite"
-          style={[styles.toast, { marginBottom: insets.bottom + spacing[3] }, animated]}
+          style={[
+            styles.toast,
+            { marginBottom: insets.bottom + spacing[3] + (item.bottom ?? 0) },
+            animated,
+          ]}
         >
           <Text numberOfLines={2} style={styles.text}>
             {item.text}

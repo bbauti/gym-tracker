@@ -1,7 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
-import { Alert, StyleSheet, View } from 'react-native'
-import Animated, { FadeIn, useAnimatedRef } from 'react-native-reanimated'
+import { type AccessibilityActionEvent, Alert, StyleSheet, View } from 'react-native'
+import Animated, { useAnimatedRef } from 'react-native-reanimated'
 import { exerciseName } from '@/db/queries/exercises'
 import {
   addRoutineSet,
@@ -24,7 +24,7 @@ import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
 import Menu, { type MenuItem } from '@/ui/Menu'
-import { RowLayout } from '@/ui/motion'
+import { RowLayout, useEnterFade } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
 import Sortable from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
@@ -39,17 +39,19 @@ const DAY_TABLES = ['routine', 'routine_day', 'routine_exercise', 'routine_set',
 
 /** Los descansos que se eligen de verdad. Lo fino se ajusta en el ejercicio, no en la rutina. */
 const REST_OPTIONS = [60, 90, 120, 180]
+const REST_DEFAULT_KEY = 'rest:default'
 
 const DAY_MENU: MenuItem[] = [
-  { key: 'edit', label: t('routine.rename'), md: 'edit', sf: 'pencil' },
-  { destructive: true, key: 'delete', label: t('common.delete'), md: 'delete', sf: 'trash' },
+  { key: 'edit', label: t('day.edit'), md: 'edit', sf: 'pencil' },
+  { destructive: true, key: 'delete', label: t('day.delete'), md: 'delete', sf: 'trash' },
 ]
 
-// ponytail: `rest_sec` se guarda pero la sesión todavía usa `exercise.default_rest_sec` — no hay
-// columna en `session_exercise` donde copiarlo al pre-cargar el día. Techo: el descanso de la rutina
-// es informativo. Upgrade: migración con `session_exercise.rest_sec` + copiarlo en startSessionFromDay.
+// El descanso que se elige acá viaja a la sesión: `startSessionFromDay` lo copia a
+// `session_exercise.rest_sec` y la pantalla de entrenamiento lo prefiere al del ejercicio y al de
+// ajustes. "Por defecto" lo devuelve a null, que es volver a esa cadena.
 const EXERCISE_MENU: MenuItem[] = [
   ...REST_OPTIONS.map((n) => ({ key: `rest:${n}`, label: t('day.rest', { n }) })),
+  { key: REST_DEFAULT_KEY, label: t('day.restDefault') },
   { destructive: true, key: 'remove', label: t('common.delete'), md: 'delete', sf: 'trash' },
 ]
 
@@ -84,10 +86,14 @@ const styles = StyleSheet.create({
     minHeight: MIN_TARGET,
     paddingRight: spacing[1],
   },
-  index: { textAlign: 'center', width: 22 },
+  // `minWidth` y no `width`: a 1.6× un índice de dos dígitos no entra en 22 pt y parte en dos líneas.
+  index: { minWidth: 22, textAlign: 'center' },
+  // `flexShrink`: a Dynamic Type grande "Entrada en calor" se comía la fila y el que se achicaba era
+  // el rango de reps, que es la única razón por la que existe esta pantalla. Cede el chip.
   kind: {
     backgroundColor: colors.fill,
     borderRadius: radius.sm,
+    flexShrink: 1,
     overflow: 'hidden',
     paddingHorizontal: spacing[2],
     paddingVertical: spacing[1] / 2,
@@ -115,6 +121,12 @@ function repsText(set: RoutineSetRow): string {
 
 const keyOfExercise = (item: ExerciseEntry) => String(item.re.id)
 
+// El swipe de `ui/SwipeRow` cuelga su acción accesible del contenedor, y acá el que enfoca VoiceOver
+// es el Pressable de adentro (iOS no hereda acciones de un ancestro que no es elemento). Sin esto
+// borrar una serie objetivo no tiene camino accesible: la fila no tiene menú, como sí lo tiene la de
+// la sesión.
+const DELETE_ACTION = [{ label: t('common.delete'), name: 'delete' }]
+
 /**
  * El editor de un día de la rutina (D04/D06/D07): ejercicios reordenables, cada uno con sus series
  * objetivo. Todo lo que se toca acá es plantilla — la app sugiere, nunca aplica (§2.2).
@@ -125,6 +137,8 @@ export default function RoutineDayScreen() {
   const data = useQuery(() => (Number.isFinite(dayId) ? readDay(dayId) : null), DAY_TABLES, [dayId])
   // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
   const scrollRef = useAnimatedRef<Animated.ScrollView>()
+  // Solo el ejercicio recién agregado (o el que vuelve con Deshacer) entra con fade.
+  const fadeIn = useEnterFade((data?.exercises ?? []).map((e) => e.re.id))
 
   // Recién borrado (el día o la rutina entera desde otra pantalla): no hay nada que dibujar.
   if (!data) return null
@@ -137,7 +151,7 @@ export default function RoutineDayScreen() {
     }
     // La única confirmación de la fase es la de borrar una rutina (§7.5), pero un día se lleva sus
     // ejercicios y `deleteDay` no devuelve con qué deshacerlo: acá el diálogo es el undo.
-    Alert.alert(day.name, undefined, [
+    Alert.alert(t('day.deleteConfirm.title'), t('day.deleteConfirm.body'), [
       { style: 'cancel', text: t('common.cancel') },
       {
         onPress: () => {
@@ -146,14 +160,15 @@ export default function RoutineDayScreen() {
           router.back()
         },
         style: 'destructive',
-        text: t('common.delete'),
+        text: t('day.deleteConfirm.action'),
       },
     ])
   }
 
   const handleExerciseMenu = (reId: number, key: string) => {
     if (key !== 'remove') {
-      updateRoutineExercise(reId, { restSec: Number(key.split(':')[1]) })
+      const restSec = key === REST_DEFAULT_KEY ? null : Number(key.split(':')[1])
+      updateRoutineExercise(reId, { restSec })
       return
     }
     // Sin diálogo (§7.5): se quita y queda el toast, que devuelve la card entera con sus series.
@@ -247,7 +262,7 @@ export default function RoutineDayScreen() {
             onReorder={(keys) => reorderRoutineExercises(dayId, keys.map(Number))}
             renderItem={(item) => (
               // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
-              <Animated.View entering={FadeIn.duration(200)} style={styles.cardSlot}>
+              <Animated.View entering={fadeIn(item.re.id)} style={styles.cardSlot}>
                 <ExerciseCard
                   item={item}
                   onDeleteSet={handleDeleteSet}
@@ -279,6 +294,9 @@ type CardProps = {
 function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
   const { re, exercise, sets } = item
   const name = exerciseName(exercise, locale)
+  // Las series que ya estaban no animan; la que agregás y la que vuelve con Deshacer, sí. Una card
+  // recién agregada monta con sus tres series adentro: entra la card, no tres fades sobre ella.
+  const fadeIn = useEnterFade(sets.map((s) => s.id))
 
   return (
     <Card style={styles.card}>
@@ -316,20 +334,20 @@ function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
       {/* El hueco que deja una serie borrada lo cierra RowLayout — es la única región de la card
           con layout animation, y las filas no se arrastran (lo que se arrastra es la card). */}
       {sets.map((set, index) => (
-        <Animated.View entering={FadeIn.duration(200)} key={set.id} layout={RowLayout}>
+        <Animated.View entering={fadeIn(set.id)} key={set.id} layout={RowLayout}>
           <SwipeRow onDelete={() => onDeleteSet(set.id)}>
-            <SetTargetRow index={index} set={set} />
+            <SetTargetRow index={index} onDelete={() => onDeleteSet(set.id)} set={set} />
           </SwipeRow>
         </Animated.View>
       ))}
       <PressableScale
-        accessibilityLabel={t('session.addSet')}
+        accessibilityLabel={`${t('day.addSet')}, ${name}`}
         onPress={() => addRoutineSet(re.id)}
         scale={0.98}
         style={styles.addSet}
       >
         <Text color="tint" role="callout">
-          {t('session.addSet')}
+          {t('day.addSet')}
         </Text>
       </PressableScale>
     </Card>
@@ -337,14 +355,28 @@ function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
 }
 
 /** Una serie objetivo: "1 · Entrada en calor · 8–12 reps · RPE 8". Toda la fila abre la hoja. */
-function SetTargetRow({ index, set }: { index: number; set: RoutineSetRow }) {
+function SetTargetRow({
+  index,
+  set,
+  onDelete,
+}: {
+  index: number
+  set: RoutineSetRow
+  onDelete: () => void
+}) {
   const reps = repsText(set)
+  // `session.rpe` son las tres letras "RPE" en los dos idiomas; `routineSet.rpe` ("RPE objetivo")
+  // es el label de la hoja y no entra en una fila de 44 pt.
   const rpe = set.targetRpe === null ? null : `${t('session.rpe')} ${set.targetRpe}`
   const kind = set.kind === 'normal' ? null : t(`setKind.${set.kind}`)
 
   return (
     <PressableScale
+      accessibilityActions={DELETE_ACTION}
       accessibilityLabel={[`${index + 1}`, kind, reps, rpe].filter(Boolean).join(', ')}
+      onAccessibilityAction={(e: AccessibilityActionEvent) => {
+        if (e.nativeEvent.actionName === 'delete') onDelete()
+      }}
       onPress={() => router.push({ params: { id: set.id }, pathname: '/routine-set' })}
       scale={0.98}
       style={styles.setRow}

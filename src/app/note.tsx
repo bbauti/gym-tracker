@@ -2,10 +2,10 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getSessionExercise, updateSessionExercise } from '@/db/queries/session'
 import { getSet, updateSet } from '@/db/queries/sets'
 import { t } from '@/i18n'
+import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { colors, radius, spacing } from '@/ui/tokens'
@@ -41,7 +41,7 @@ export default function NoteScreen() {
   const params = useLocalSearchParams<{ seId?: string; setId?: string }>()
   const seId = toId(params.seId)
   const setId = toId(params.setId)
-  const insets = useSafeAreaInsets()
+  const bottom = useSheetBottomInset()
 
   // Lectura de arranque, no suscripción: mientras se escribe manda el draft.
   const [text, setText] = useState(() => readNote(seId, setId))
@@ -55,10 +55,12 @@ export default function NoteScreen() {
 
   return (
     <KeyboardAvoidingView
-      // Sin `automaticOffset` la hoja cree estar arriba de todo y no se corre con el teclado.
+      // Sin `automaticOffset` la hoja cree estar arriba de todo y no se corre con el teclado. En
+      // Android va apagada y el hueco lo pone el padding de abajo (ver `src/ui/keyboard.ts`).
       automaticOffset
       behavior="padding"
-      style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}
+      enabled={KAV_ENABLED}
+      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
     >
       <View style={styles.header}>
         <Text accessibilityRole="header" role="headline">

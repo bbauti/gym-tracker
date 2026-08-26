@@ -127,6 +127,14 @@ export function removeSessionExercise(seId: number): SessionExerciseSnapshot | n
 /** Same ids and same orderIndex, sets included: undo puts the card back where it was. */
 export function restoreSessionExercise(snapshot: SessionExerciseSnapshot): void {
   db.transaction((tx) => {
+    // Same as restoreSet: undo can outlive the session it belongs to (deleted from history), and
+    // the FK insert would throw inside the toast's onPress.
+    const row = tx
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.id, snapshot.se.sessionId))
+      .get()
+    if (!row) return
     tx.insert(sessionExercise).values(snapshot.se).run()
     if (snapshot.sets.length > 0) tx.insert(setEntry).values(snapshot.sets).run()
   })
@@ -250,6 +258,12 @@ export function resumeSession(id: number): void {
  */
 export function endSession(id: number): void {
   db.transaction((tx) => {
+    // Terminar dos veces (dos toques que pasan el diálogo, la misma sesión terminada desde otra
+    // pantalla) volvería a estampar `ended_at` —cambiando la duración del historial— y rotaría la
+    // rutina un día de más. Terminada es terminada.
+    const row = tx.select().from(session).where(eq(session.id, id)).get()
+    if (!row || row.endedAt !== null) return
+
     const seIds = tx
       .select({ id: sessionExercise.id })
       .from(sessionExercise)
@@ -289,15 +303,12 @@ export function endSession(id: number): void {
     // Terminar con la sesión en pausa cierra la pausa: si no, `pausedAt` queda abierto para siempre
     // y la duración del historial descontaría hasta el infinito.
     const now = Date.now()
-    const row = tx.select().from(session).where(eq(session.id, id)).get()
     tx.update(session)
       .set({
         endedAt: now,
         restEndsAt: null,
         pausedAt: null,
-        pausedMs: row
-          ? row.pausedMs + (row.pausedAt === null ? 0 : Math.max(0, now - row.pausedAt))
-          : 0,
+        pausedMs: row.pausedMs + (row.pausedAt === null ? 0 : Math.max(0, now - row.pausedAt)),
       })
       .where(eq(session.id, id))
       .run()

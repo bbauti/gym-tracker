@@ -14,6 +14,11 @@ type Props = {
   label: string
   /** Para valores que no se leen como número pelado ("—" cuando no hay RPE, "8,5" en es). */
   format?: (v: number) => string
+  /**
+   * Lo que dice el lector en vez de `format(value)`. Un guión en pantalla es "vacío"; leído en voz
+   * alta es "raya" (o nada, según la verbosidad), y el valor sigue siendo el que usarían los ±.
+   */
+  a11yText?: string
 }
 
 /** Techo del contrato: 8 cambios por segundo. Más rápido no se alcanza a leer el número. */
@@ -74,7 +79,16 @@ function AdjustButton({ disabled, glyph, label, onPress, onHold, onRelease }: Bu
  * Stepper ±: el número se toca, no se tipea (§5.4 — los campos numéricos nunca abren el teclado).
  * Mantener repite a 8/s como máximo, con un `setInterval` que se corta al soltar y al desmontar.
  */
-export default function Stepper({ value, min, max, step = 1, onChange, label, format }: Props) {
+export default function Stepper({
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  label,
+  format,
+  a11yText,
+}: Props) {
   const lo = min ?? Number.NEGATIVE_INFINITY
   const hi = max ?? Number.POSITIVE_INFINITY
 
@@ -139,7 +153,7 @@ export default function Stepper({ value, min, max, step = 1, onChange, label, fo
       accessibilityActions={ACTIONS}
       accessibilityLabel={label}
       accessibilityRole="adjustable"
-      accessibilityValue={{ max, min, now: value, text: display }}
+      accessibilityValue={{ max, min, now: value, text: a11yText ?? display }}
       accessible
       onAccessibilityAction={onAction}
       style={styles.row}

@@ -40,8 +40,12 @@ const {
   getRoutineTree,
   lastWeightG,
   listRoutines,
+  removeRoutineExercise,
+  restoreRoutineExercise,
+  restoreRoutineSet,
   startSessionFromDay,
   updateDay,
+  updateRoutineExercise,
   updateRoutineSet,
 } = await import('./queries/routines')
 const { endSession, getSessionTree } = await import('./queries/session')
@@ -296,4 +300,84 @@ test('the summary counts the day that is up next and estimates it from finished 
   expect(summary.nextDay?.setCount).toBe(6)
   expect(summary.lastDoneAt).toBe(3_600_000)
   expect(summary.estimatedMs).toBe(45 * 60_000)
+})
+
+test('the rest the routine asks for travels with the row, not with the routine', () => {
+  const routineId = createRoutine('Fuerza', 'A')
+  const [dayId] = dayIds(routineId)
+  const reId = addRoutineExercise(dayId, SQUAT)
+  addRoutineExercise(dayId, BENCH)
+  updateRoutineExercise(reId, { restSec: 180 })
+
+  const session = getSessionTree(startSessionFromDay(dayId))
+  // El de la rutina viaja copiado; el que no pide nada queda en null (= el del ejercicio o ajustes).
+  expect(session?.exercises.map((e) => e.se.restSec)).toEqual([180, null])
+
+  // Editar la rutina después no cambia el descanso del entrenamiento que ya arrancó.
+  updateRoutineExercise(reId, { restSec: 60 })
+  expect(getSessionTree(session?.session.id ?? 0)?.exercises[0].se.restSec).toBe(180)
+})
+
+test('finishing an already finished workout does not rotate again', () => {
+  const routineId = createRoutine('Full body', 'A')
+  addDay(routineId, 'B')
+  const [dayA] = dayIds(routineId)
+
+  const sessionId = startSessionFromDay(dayA)
+  endSession(sessionId)
+  const endedAt = getSessionTree(sessionId)?.session.endedAt ?? 0
+  expect(currentIndex(routineId)).toBe(1)
+
+  endSession(sessionId)
+  expect(currentIndex(routineId)).toBe(1)
+  expect(getSessionTree(sessionId)?.session.endedAt).toBe(endedAt)
+})
+
+test('deleting a day before the one that is up next does not skip it', () => {
+  const routineId = createRoutine('Arnold', 'A')
+  addDay(routineId, 'B')
+  addDay(routineId, 'C')
+  const [dayA, dayB] = dayIds(routineId)
+
+  endSession(startSessionFromDay(dayA))
+  expect(listRoutines()[0].nextDay?.id).toBe(dayB)
+
+  // `current_day_index` es una posición: borrar A corre a B una casilla para atrás.
+  deleteDay(dayA)
+  expect(listRoutines()[0].nextDay?.id).toBe(dayB)
+  expect(currentIndex(routineId)).toBe(0)
+})
+
+test('undo is a no-op once the row it belonged to is gone', () => {
+  const routineId = createRoutine('PPL', 'Empuje')
+  const [dayId] = dayIds(routineId)
+  const reId = addRoutineExercise(dayId, BENCH)
+  const set = deleteRoutineSet(getRoutineTree(routineId)?.days[0].exercises[0].sets[0].id ?? -1)
+  const removed = removeRoutineExercise(reId)
+
+  // El toast sobrevive a navegar: para cuando se toca "Deshacer" el padre puede no estar.
+  expect(() => restoreRoutineSet(set)).not.toThrow()
+  expect(getRoutineTree(routineId)?.days[0].exercises).toHaveLength(0)
+
+  // El ejercicio sí vuelve (su día sigue ahí), con las series que le quedaban.
+  if (removed) restoreRoutineExercise(removed)
+  expect(getRoutineTree(routineId)?.days[0].exercises[0].sets).toHaveLength(2)
+
+  const again = removeRoutineExercise(reId)
+  deleteDay(dayId)
+  if (again) expect(() => restoreRoutineExercise(again)).not.toThrow()
+  expect(getRoutineTree(routineId)?.days).toHaveLength(0)
+})
+
+test('a session that lasted seconds does not drag the estimate to zero', () => {
+  const routineId = createRoutine('Semanal', 'Pierna')
+  const [dayId] = dayIds(routineId)
+
+  // Empezar sin querer y terminar: 30 s que redondeaban a "~0:00" en la card.
+  history(SQUAT, [{ at: 10, weightG: 100_000 }], { dayId, endedAt: 30_000, startedAt: 0 })
+  expect(estimatedDurationMs(dayId)).toBeNull()
+  expect(listRoutines()[0].estimatedMs).toBeNull()
+
+  history(SQUAT, [{ at: 20, weightG: 100_000 }], { dayId, endedAt: 40 * 60_000, startedAt: 0 })
+  expect(estimatedDurationMs(dayId)).toBe(40 * 60_000)
 })

@@ -1,7 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { Alert, StyleSheet, View } from 'react-native'
-import Animated, { FadeIn, useAnimatedRef } from 'react-native-reanimated'
+import Animated, { useAnimatedRef } from 'react-native-reanimated'
 import {
   addDay,
   deleteRoutine,
@@ -15,8 +15,10 @@ import { useQuery } from '@/db/useQuery'
 import { plural, t } from '@/i18n'
 import { ensureNotificationPermission } from '@/notifications'
 import Button from '@/ui/Button'
+import { haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import Menu, { type MenuItem } from '@/ui/Menu'
+import { useEnterFade } from '@/ui/motion'
 import Sortable from '@/ui/Sortable'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
@@ -74,9 +76,12 @@ export default function RoutineScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const routineId = Number(id)
   const tree = useQuery(() => getRoutineTree(routineId), ROUTINE_TABLES, [routineId])
-  const busy = useQuery(() => getActiveSessionId() !== null, SESSION_TABLES)
+  // El id y no un booleano: con un entrenamiento abierto el botón no se apaga, lleva a ese.
+  const activeId = useQuery(getActiveSessionId, SESSION_TABLES)
   // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
   const scrollRef = useAnimatedRef<Animated.ScrollView>()
+  // Solo el día recién agregado entra con fade; los que ya estaban al abrir, no.
+  const fadeIn = useEnterFade((tree?.days ?? []).map((d) => d.day.id))
 
   // Recién borrada: la pantalla se pinta una vez más antes de que el back se complete.
   if (!tree) return null
@@ -103,6 +108,9 @@ export default function RoutineScreen() {
       { style: 'cancel', text: t('common.cancel') },
       {
         onPress: () => {
+          // El háptico va en el mismo bloque que el borrado (§7.4), igual que el del día y el de
+          // una serie: esto es lo más destructivo de la pantalla y era lo único mudo.
+          haptic('delete')
           deleteRoutine(routineId)
           router.back()
         },
@@ -147,18 +155,32 @@ export default function RoutineScreen() {
         contentContainerStyle={styles.content}
         contentInsetAdjustmentBehavior="automatic"
         ref={scrollRef}
+        // El auto-scroll del sortable lee el offset con `useScrollViewOffset`, y sin esto RN manda
+        // el evento una sola vez por gesto: arrastrar un día contra el borde no scrollearía.
+        scrollEventThrottle={16}
       >
         {nextDay ? (
           <View style={styles.start}>
-            {/* Mismo apagado que la card de la tab: con una sesión abierta no se empieza otra. */}
+            {/* Dos sesiones a la vez dejarían la vieja sin terminar y fuera del historial (que solo
+                lista las terminadas). Acá no hay card de "Continuar" como en la tab, así que el
+                botón no se apaga: se convierte en ella y lleva al entrenamiento que está abierto. */}
             <Button
-              disabled={busy}
               onPress={() => {
                 void ensureNotificationPermission()
-                const sessionId = startSessionFromDay(nextDay.id)
+                // La base y no `activeId`: `useQuery` difiere la invalidación un `setTimeout(0)`
+                // (db/useQuery.ts), así que en un doble toque el segundo todavía ve `null` y
+                // arrancaba una segunda sesión — la primera quedaba abierta para siempre y fuera
+                // del historial. Leído en el momento, el segundo toque entra a la que se acaba de
+                // crear, que es lo mismo que hace el título cuando ya hay una abierta.
+                const sessionId = getActiveSessionId() ?? startSessionFromDay(nextDay.id)
                 router.push({ params: { id: sessionId }, pathname: '/session/[id]' })
               }}
-              title={t('routine.start', { day: nextDay.name })}
+              title={
+                activeId === null
+                  ? t('routine.start', { day: nextDay.name })
+                  : t('session.continue')
+              }
+              variant={activeId === null ? 'filled' : 'tinted'}
             />
           </View>
         ) : null}
@@ -190,7 +212,7 @@ export default function RoutineScreen() {
               return (
                 // Entra con FadeIn el día recién agregado; la lista no se anima al reordenar
                 // (de eso se ocupa el sortable con sus propios springs).
-                <Animated.View entering={FadeIn.duration(200)} style={styles.rowSlot}>
+                <Animated.View entering={fadeIn(item.day.id)} style={styles.rowSlot}>
                   <View style={styles.rowCard}>
                     <View style={styles.hideSeparator}>
                       <ListRow

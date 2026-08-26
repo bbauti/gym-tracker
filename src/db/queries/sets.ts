@@ -13,6 +13,10 @@ export type SetPatch = Partial<
 /**
  * "Same again": the new row starts as a copy of the last one (values and kind), uncompleted. Typing
  * over it is one tap cheaper than typing it from scratch, and most sets repeat.
+ *
+ * El objetivo del día y el peso sugerido viajan con la copia (D06/D07): una quinta serie agregada a
+ * mano en un día de rutina es "una más igual", y sin esto sería la única fila del ejercicio sin
+ * fantasma ni objetivo. Siguen siendo sugerencias — nada las aplica hasta que se tilda (§2.2).
  */
 export function addSet(seId: number): number {
   return db.transaction((tx) => {
@@ -34,6 +38,9 @@ export function addSet(seId: number): number {
         reps: prev?.reps ?? null,
         durationMs: prev?.durationMs ?? null,
         distanceMm: prev?.distanceMm ?? null,
+        targetRepsMin: prev?.targetRepsMin ?? null,
+        targetRepsMax: prev?.targetRepsMax ?? null,
+        suggestedWeightG: prev?.suggestedWeightG ?? null,
       })
       .returning({ id: setEntry.id })
       .get().id
@@ -89,8 +96,18 @@ export function deleteSet(setId: number): SetRow {
   return row
 }
 
-/** Same id and same orderIndex: undo restores the row in place, not at the end. */
+/**
+ * Same id and same orderIndex: undo restores the row in place, not at the end. A no-op if the
+ * exercise (or the whole session) is gone by the time undo is tapped — the toast outlives the
+ * screen, and the FK insert would throw inside its onPress.
+ */
 export function restoreSet(row: SetRow): void {
+  const se = db
+    .select({ id: sessionExercise.id })
+    .from(sessionExercise)
+    .where(eq(sessionExercise.id, row.sessionExerciseId))
+    .get()
+  if (!se) return
   db.insert(setEntry).values(row).run()
 }
 

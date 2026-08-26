@@ -17,6 +17,12 @@ type Props<T> = {
  *
  * El separador entre ítems va ADENTRO de `renderItem` (padding en el wrapper de la card), no como
  * gap del contenedor: el ítem levantado se mide con su propio alto y el hueco tiene que viajar con él.
+ *
+ * ponytail: reordenar es SOLO arrastrando. Techo: con VoiceOver/TalkBack o un teclado no hay forma
+ * de mover un ítem — el lector se traga el gesto y la librería no expone acciones. Camino de
+ * upgrade (auditoría de accesibilidad, fase 7): `accessibilityActions` moveUp/moveDown por ítem en
+ * el wrapper de `renderItem`, y su `onAccessibilityAction` arma el nuevo orden de `data` con
+ * `keyExtractor` y llama al mismo `onReorder`. Sin cambio de comportamiento para el que arrastra.
  */
 export default function Sortable<T>({
   data,

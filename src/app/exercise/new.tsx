@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { createExercise } from '@/db/queries/exercises'
 import { EQUIPMENT, type Equipment, METRICS, type Metric, MUSCLES, type Muscle } from '@/db/schema'
 import { t } from '@/i18n'
+import { useAndroidKeyboardHeight } from '@/ui/keyboard'
 import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
@@ -101,6 +102,9 @@ export default function NewExerciseScreen() {
   const [muscle, setMuscle] = useState<Muscle>('chest')
   const [equipment, setEquipment] = useState<Equipment>('barbell')
   const [metric, setMetric] = useState<Metric>('weight_reps')
+  // La hoja es de detent [1] y en Android tampoco se achica con el teclado: sin este hueco los tres
+  // Menu quedan debajo del IME y la lista no tiene nada de scroll para llegar (ver `@/ui/keyboard`).
+  const keyboard = useAndroidKeyboardHeight()
 
   const trimmed = name.trim()
 
@@ -122,7 +126,7 @@ export default function NewExerciseScreen() {
 
   return (
     <ScrollView
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing[6] + keyboard }]}
       keyboardShouldPersistTaps="handled"
       style={styles.screen}
     >

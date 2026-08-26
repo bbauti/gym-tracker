@@ -1,4 +1,15 @@
-import { and, asc, desc, eq, getTableColumns, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import { db } from '../client'
 import {
@@ -54,6 +65,8 @@ const DEFAULT_REPS_MAX = 12
 
 /** Cuántas sesiones terminadas promedia la estimación de duración (D12). */
 const ESTIMATE_SAMPLE = 5
+/** Menos de un minuto no fue un entrenamiento: fue abrir y cerrar. No entra en el promedio. */
+const ESTIMATE_MIN_MS = 60_000
 
 // SQL a mano y no `${tabla.columna}`: en el select de una query de una sola tabla drizzle tira el
 // prefijo de tabla, y una subquery correlacionada resolvería ese `"id"` pelado contra su propio FROM.
@@ -330,29 +343,40 @@ export function updateDay(id: number, patch: { name?: string; isDeload?: boolean
 }
 
 /**
- * Borrar el día que la rotación estaba apuntando dejaría `current_day_index` señalando al vacío: la
- * card diría "Siguiente: —" hasta que alguien entrene. Se recorta acá, en la misma transacción.
+ * `current_day_index` es una POSICIÓN, así que borrar un día corre a todos los que estaban detrás:
+ * igual que en `reorderDays`, se anota a qué día apuntaba la rotación y se lo vuelve a buscar en la
+ * lista que quedó. Borrar el lunes no te saltea el martes.
+ *
+ * Si el que se borró era justo el que tocaba, el índice se recorta y el siguiente pasa a ser el que
+ * toca (y con la rutina sin días, cero: la card dice "Siguiente: —" hasta que agregues uno).
  */
 export function deleteDay(id: number): void {
   db.transaction((tx) => {
     const day = tx.select().from(routineDay).where(eq(routineDay.id, id)).get()
     if (!day) return
-    tx.delete(routineDay).where(eq(routineDay.id, id)).run()
-
     const row = tx.select().from(routine).where(eq(routine.id, day.routineId)).get()
-    if (!row) return
-    const left =
+    const orderedIds = () =>
       tx
-        .select({ n: sql<number>`count(*)` })
+        .select({ id: routineDay.id })
         .from(routineDay)
         .where(eq(routineDay.routineId, day.routineId))
-        .get()?.n ?? 0
-    const clamped = left === 0 ? 0 : Math.min(row.currentDayIndex, left - 1)
-    if (clamped !== row.currentDayIndex) {
-      tx.update(routine)
-        .set({ currentDayIndex: clamped })
-        .where(eq(routine.id, day.routineId))
-        .run()
+        .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
+        .all()
+        .map((d) => d.id)
+
+    const before = orderedIds()
+    const pointedAt =
+      row && before.length > 0 ? before[wrap(row.currentDayIndex, before.length)] : null
+
+    tx.delete(routineDay).where(eq(routineDay.id, id)).run()
+    if (!row) return
+
+    const left = orderedIds()
+    const at = pointedAt === null ? -1 : left.indexOf(pointedAt)
+    const next =
+      at >= 0 ? at : left.length === 0 ? 0 : Math.min(row.currentDayIndex, left.length - 1)
+    if (next !== row.currentDayIndex) {
+      tx.update(routine).set({ currentDayIndex: next }).where(eq(routine.id, day.routineId)).run()
     }
   })
 }
@@ -444,8 +468,19 @@ export function removeRoutineExercise(id: number): RoutineExerciseSnapshot | nul
   })
 }
 
+/**
+ * El toast vive 4 s (12 con lector de pantalla) y sobrevive a navegar: para cuando tocás "Deshacer"
+ * el día pudo haberse borrado. Sin el padre el insert reventaría contra la FK, así que deshacer lo
+ * que ya no existe no hace nada (y no tira dentro del onPress del toast).
+ */
 export function restoreRoutineExercise(snapshot: RoutineExerciseSnapshot): void {
   db.transaction((tx) => {
+    const day = tx
+      .select({ id: routineDay.id })
+      .from(routineDay)
+      .where(eq(routineDay.id, snapshot.re.dayId))
+      .get()
+    if (!day) return
     tx.insert(routineExercise).values(snapshot.re).run()
     if (snapshot.sets.length > 0) tx.insert(routineSet).values(snapshot.sets).run()
   })
@@ -513,8 +548,15 @@ export function deleteRoutineSet(id: number): RoutineSetRow {
   return row
 }
 
-/** Mismo id y mismo `orderIndex`: deshacer la restaura en su lugar, no al final. */
+/** Mismo id y mismo `orderIndex`: deshacer la restaura en su lugar, no al final. Ídem arriba: si el
+ * ejercicio se fue mientras el toast estaba en pantalla, no hay dónde devolverla. */
 export function restoreRoutineSet(row: RoutineSetRow): void {
+  const re = db
+    .select({ id: routineExercise.id })
+    .from(routineExercise)
+    .where(eq(routineExercise.id, row.routineExerciseId))
+    .get()
+  if (!re) return
   db.insert(routineSet).values(row).run()
 }
 
@@ -522,20 +564,26 @@ export function restoreRoutineSet(row: RoutineSetRow): void {
  * D12. Promedio de las últimas sesiones terminadas de ESTE día, tiempo en pausa descontado (es la
  * misma cuenta que el historial). `null` mientras el día no se haya entrenado nunca: un número
  * inventado a partir de "3 series × 90 s" miente más de lo que ayuda.
+ *
+ * Las de menos de un minuto (empezar sin querer y terminar) quedan afuera del promedio: una sola
+ * alcanzaba para que la card prometiera "~0:00".
  */
 export function estimatedDurationMs(dayId: number): number | null {
+  const net = sql<number>`${session.endedAt} - ${session.startedAt} - ${session.pausedMs}`
   const rows = db
-    .select({
-      ms: sql<number>`max(0, ${session.endedAt} - ${session.startedAt} - ${session.pausedMs})`,
-    })
+    .select({ ms: net })
     .from(session)
-    .where(and(eq(session.routineDayId, dayId), isNotNull(session.endedAt)))
+    .where(
+      and(eq(session.routineDayId, dayId), isNotNull(session.endedAt), gt(net, ESTIMATE_MIN_MS)),
+    )
     .orderBy(desc(session.endedAt), desc(session.id))
     .limit(ESTIMATE_SAMPLE)
     .all()
 
   if (rows.length === 0) return null
-  return Math.round(rows.reduce((sum, r) => sum + r.ms, 0) / rows.length)
+  // Al minuto: es un promedio de 5 entrenamientos, y "~1:05:23" promete una precisión que no tiene.
+  const avg = rows.reduce((sum, r) => sum + r.ms, 0) / rows.length
+  return Math.round(avg / 60_000) * 60_000
 }
 
 /**

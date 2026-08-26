@@ -1,7 +1,7 @@
 import { router, useIsFocused } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { ScrollView, StyleSheet, View } from 'react-native'
-import Animated, { FadeIn } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { listRoutines, type RoutineSummary, startSessionFromDay } from '@/db/queries/routines'
 import { createSession, getActiveSessionId, getSessionTree } from '@/db/queries/session'
@@ -14,15 +14,25 @@ import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
 import ListRow from '@/ui/ListRow'
+import { useEnterFade } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
 import { useNow } from '@/ui/RestTimer'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 const SESSION_TABLES = ['session']
-// `session` también: la última vez y la duración estimada salen de las sesiones terminadas. Mientras
-// entrenás esta tab está atrás y useQuery difiere el re-run hasta que volvés (ver db/useQuery.ts).
-const ROUTINE_TABLES = ['routine', 'routine_day', 'routine_exercise', 'routine_set', 'session']
+// `session` y `set_entry` también: la última vez y la duración estimada salen de las sesiones
+// terminadas, y terminar una borra las series vacías en la misma transacción. Mientras entrenás esta
+// tab está atrás y useQuery difiere el re-run hasta que volvés (ver db/useQuery.ts): al volver del
+// entrenamiento la rotación, la estimación y el "última vez" se recalculan de una sola pasada.
+const ROUTINE_TABLES = [
+  'routine',
+  'routine_day',
+  'routine_exercise',
+  'routine_set',
+  'session',
+  'set_entry',
+]
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.groupedBackground, flex: 1 },
@@ -72,6 +82,19 @@ function askNotifications() {
   void ensureNotificationPermission()
 }
 
+/**
+ * Abrir el entrenamiento: el que ya está abierto o el que arranca `start`.
+ *
+ * La sesión abierta se lee de la base en el toque y no de `useQuery`, que difiere la invalidación un
+ * `setTimeout(0)` (db/useQuery.ts): en un doble toque el segundo veía la pantalla todavía "sin
+ * sesión" y arrancaba una segunda. La primera quedaba abierta para siempre, invisible en el
+ * historial (que solo lista las terminadas) y con el día de rutina entero precargado adentro.
+ */
+function openSession(start: () => number) {
+  askNotifications()
+  router.push({ params: { id: getActiveSessionId() ?? start() }, pathname: '/session/[id]' })
+}
+
 function activeSession() {
   const id = getActiveSessionId()
   return id === null ? null : (getSessionTree(id)?.session ?? null)
@@ -86,6 +109,17 @@ function relativeTime(at: number): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return t('time.hoursAgo', { n: hours })
   return t('time.daysAgo', { n: Math.round(hours / 24) })
+}
+
+/**
+ * La estimación se dice en minutos, no en `formatDuration`: "~45:00" se lee como un cronómetro
+ * corriendo y esto es una duración aproximada.
+ */
+function estimatedLabel(ms: number) {
+  const min = Math.round(ms / 60_000)
+  return min < 60
+    ? t('routine.estimatedMin', { n: min })
+    : t('routine.estimatedHour', { h: Math.floor(min / 60), m: min % 60 })
 }
 
 /** Etiqueta chiquita y NO tocable: `ui/Chip` es un control (pide onPress y vibra al tocarlo). */
@@ -115,7 +149,7 @@ function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean
           t('history.exercises.other', { n: nextDay.exerciseCount }),
         ),
         // D12: sin sesiones de ese día no hay número que decir, y uno inventado miente.
-        estimatedMs === null ? null : t('routine.estimated', { time: formatDuration(estimatedMs) }),
+        estimatedMs === null ? null : estimatedLabel(estimatedMs),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -158,21 +192,22 @@ function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean
           {meta}
         </Text>
       </PressableScale>
-      {/* ponytail: con una sesión abierta el botón se apaga en vez de preguntar "¿termino la otra?":
-          el diálogo necesita strings que no existen en el diccionario. Techo: si te olvidaste una
-          sesión abierta tenés que cerrarla desde la card de arriba. Upgrade: keys
-          `routine.busyConfirm.*` + Alert con "Continuar" / "Empezar igual". */}
-      <Button
-        disabled={busy || nextDay === null}
-        onPress={() => {
-          if (!nextDay) return
-          askNotifications()
-          const id = startSessionFromDay(nextDay.id)
-          router.push({ params: { id }, pathname: '/session/[id]' })
-        }}
-        title={t('routine.startShort')}
-        variant="tinted"
-      />
+      {/* Con un entrenamiento abierto no hay botón: la regla de las dos pantallas es que haya
+          exactamente UN control vivo para esa sesión y ninguno muerto. Acá ese control es la card de
+          "Continuar" que está arriba de todo; en `routine/[id]`, que no la tiene, el botón se
+          convierte en ella. Un botón apagado no dice por qué lo está (el lector solo oye
+          "atenuado") y cinco cards con "Continuar entrenamiento" serían cinco veces el mismo botón.
+          Sin días tampoco hay botón: la card abre la rutina, que es donde se agrega el primero.
+          El label lleva el nombre de la rutina: el cuerpo de la card es otro elemento accesible, así
+          que sin eso son cinco "Empezar, botón" idénticos seguidos. */}
+      {nextDay && !busy ? (
+        <Button
+          accessibilityLabel={`${routine.name}, ${t('routine.start', { day: nextDay.name })}`}
+          onPress={() => openSession(() => startSessionFromDay(nextDay.id))}
+          title={t('routine.startShort')}
+          variant="tinted"
+        />
+      ) : null}
     </Card>
   )
 }
@@ -181,6 +216,8 @@ export default function TrainScreen() {
   const insets = useSafeAreaInsets()
   const current = useQuery(activeSession, SESSION_TABLES)
   const routines = useQuery(listRoutines, ROUTINE_TABLES)
+  // Solo la rutina recién creada entra con fade: la tab queda montada, así que "recién" es de verdad.
+  const fadeIn = useEnterFade(routines.map((s) => s.routine.id))
   // Mismo cronómetro que la pantalla de sesión: derivado del reloj, 1 Hz. No tica en pausa, sin
   // sesión, ni con la tab atrás (las tabs nativas dejan las pantallas montadas).
   const focused = useIsFocused()
@@ -261,9 +298,10 @@ export default function TrainScreen() {
               {t('routine.title')}
             </Text>
             <View style={styles.routines}>
-              {/* Sin animación de lista: solo el FadeIn de la card que entra (§7.5). */}
+              {/* Sin animación de lista: solo el FadeIn de la rutina que entra (§7.5) — las que ya
+                  estaban al abrir la tab no animan, o volver del entrenamiento se lee como carga. */}
               {routines.map((summary) => (
-                <Animated.View entering={FadeIn.duration(200)} key={summary.routine.id}>
+                <Animated.View entering={fadeIn(summary.routine.id)} key={summary.routine.id}>
                   <RoutineCard busy={busy} summary={summary} />
                 </Animated.View>
               ))}
@@ -281,20 +319,19 @@ export default function TrainScreen() {
         )}
       </ScrollView>
 
-      {/* El entrenamiento libre nunca desaparece: con rutinas baja a acción secundaria. Con una
-          sesión abierta se apaga (la card de arriba es la que hay que atender). */}
-      <View style={styles.footer}>
-        <Button
-          disabled={busy}
-          onPress={() => {
-            askNotifications()
-            const id = createSession()
-            router.push({ params: { id }, pathname: '/session/[id]' })
-          }}
-          title={routines.length === 0 ? t('session.start') : t('routine.freeWorkout')}
-          variant={routines.length === 0 ? 'filled' : 'plain'}
-        />
-      </View>
+      {/* El entrenamiento libre baja a acción secundaria cuando hay rutinas, y con una sesión
+          abierta no está: misma regla que el botón de la card — el único control de esa sesión es la
+          card de "Continuar". Esta barra está fija abajo, así que un botón apagado acá sería el
+          control muerto más visible de la app. */}
+      {busy ? null : (
+        <View style={styles.footer}>
+          <Button
+            onPress={() => openSession(createSession)}
+            title={routines.length === 0 ? t('session.start') : t('routine.freeWorkout')}
+            variant={routines.length === 0 ? 'filled' : 'plain'}
+          />
+        </View>
+      )}
     </View>
   )
 }

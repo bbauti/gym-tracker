@@ -1,4 +1,5 @@
-import { Easing, LinearTransition } from 'react-native-reanimated'
+import { useState } from 'react'
+import { Easing, FadeIn, LinearTransition } from 'react-native-reanimated'
 
 // Plan §7.2. Los defaults de Reanimated (mass 4, damping 120, stiffness 900) son pesados:
 // siempre un preset. El bounce se gana con momentum real, nunca bajando el damping "porque sí".
@@ -26,3 +27,19 @@ export const Timing = {
 
 // Máximo un contenedor con RowLayout por región, y nunca en una fila que se está arrastrando.
 export const RowLayout = LinearTransition.springify().mass(0.8).damping(22).stiffness(300)
+
+/** El fade de una fila/card que aparece sola: agregarla, o que vuelva con Deshacer (§7.6). */
+const EnterFade = FadeIn.duration(200)
+
+/**
+ * `entering` SOLO para lo que aparece después del primer render. Un `entering` puesto a secas
+ * dispara en todas las filas al montar la pantalla: abrir un día con 4 ejercicios × 4 series son 20
+ * fades a la vez sobre la transición del push, y eso se lee como carga (§7.5 — es el mismo motivo
+ * por el que el tilde de `ui/SetRow` no usa `FadeIn`). Las que ya estaban entran sin animación.
+ *
+ * `ids` se lee una sola vez, en el montaje: lo que llegue después es nuevo y se anima.
+ */
+export function useEnterFade<K>(ids: Iterable<K>): (id: K) => typeof EnterFade | undefined {
+  const [atMount] = useState(() => new Set(ids))
+  return (id: K) => (atMount.has(id) ? undefined : EnterFade)
+}
