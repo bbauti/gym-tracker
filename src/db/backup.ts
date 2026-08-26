@@ -129,6 +129,21 @@ export async function exportJson(): Promise<void> {
   await share(file, 'public.json', 'application/json')
 }
 
+/**
+ * N02. Un objeto a un .json en cache y directo a la hoja de compartir (exportar una rutina).
+ * El nombre lo escribió el usuario, así que todo lo que no sea letra o número se aplana: una barra
+ * en "Push/Pull" sería un directorio que no existe.
+ */
+export async function shareJsonFile(name: string, data: unknown): Promise<void> {
+  const slug = name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '')
+  const file = guard(() => {
+    const target = new File(Paths.cache, `${slug || 'gym-tracker'}-${stamp()}.json`)
+    target.write(JSON.stringify(data))
+    return target
+  })
+  await share(file, 'public.json', 'application/json')
+}
+
 type CsvRow = {
   started_at: number
   completed_at: number | null

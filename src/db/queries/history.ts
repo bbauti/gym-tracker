@@ -1,7 +1,8 @@
-import { desc, getTableColumns, isNotNull, sql } from 'drizzle-orm'
+import { and, desc, getTableColumns, gte, isNotNull, lt, type SQL, sql } from 'drizzle-orm'
 import { db } from '../client'
 import { session } from '../schema'
 import type { SessionRow } from './session'
+import { addDays } from './stats'
 
 export type SessionSummary = {
   session: SessionRow
@@ -32,11 +33,8 @@ const VOLUME_G = sql<number>`(
   where "session_exercise"."session_id" = "session"."id"
 )`
 
-/**
- * Finished workouts, newest first. Correlated subqueries instead of joins: joining three children of
- * `session` in one query multiplies the rows and every count comes out wrong.
- */
-export function listSessions(opts?: { limit?: number; offset?: number }): SessionSummary[] {
+/** El mismo select para las tres listas: la única diferencia es el WHERE. */
+function summaries(where: SQL | undefined, limit: number, offset = 0): SessionSummary[] {
   const rows = db
     .select({
       ...getTableColumns(session),
@@ -45,10 +43,10 @@ export function listSessions(opts?: { limit?: number; offset?: number }): Sessio
       volumeG: VOLUME_G,
     })
     .from(session)
-    .where(isNotNull(session.endedAt))
+    .where(and(isNotNull(session.endedAt), where))
     .orderBy(desc(session.startedAt), desc(session.id))
-    .limit(opts?.limit ?? 50)
-    .offset(opts?.offset ?? 0)
+    .limit(limit)
+    .offset(offset)
     .all()
 
   return rows.map(({ exerciseCount, setCount, volumeG, ...row }) => ({
@@ -58,4 +56,54 @@ export function listSessions(opts?: { limit?: number; offset?: number }): Sessio
     volumeG,
     durationMs: Math.max(0, (row.endedAt ?? row.startedAt) - row.startedAt - row.pausedMs),
   }))
+}
+
+/**
+ * Finished workouts, newest first. Correlated subqueries instead of joins: joining three children of
+ * `session` in one query multiplies the rows and every count comes out wrong.
+ *
+ * D09: `day` es la medianoche local (`startOfDay`) del día que el calendario tiene seleccionado, y
+ * filtra por cuándo EMPEZÓ la sesión — el mismo reloj con el que el calendario pinta sus puntos, así
+ * que un entrenamiento que cruza la medianoche cae en el día en el que se sentó a entrenar.
+ */
+export function listSessions(opts?: {
+  limit?: number
+  offset?: number
+  day?: number
+}): SessionSummary[] {
+  const day = opts?.day
+  // `addDays` suma días de calendario, no 24 h: sobrevive a un cambio de horario de verano.
+  const where =
+    day === undefined
+      ? undefined
+      : and(gte(session.startedAt, day), lt(session.startedAt, addDays(day, 1)))
+  return summaries(where, opts?.limit ?? 50, opts?.offset ?? 0)
+}
+
+/** `%` y `_` los escribe el usuario en el buscador, no son comodines suyos. */
+const escapeLike = (q: string) => q.replace(/[\\%_]/g, (c) => `\\${c}`)
+
+/**
+ * S02. Busca en lo que el usuario escribió (nombre y notas de la sesión, notas del ejercicio) y en
+ * los nombres del catálogo, en los dos idiomas: "banca" encuentra el día en el que hiciste press
+ * banca aunque la sesión se llame "Torso".
+ *
+ * ponytail: LIKE, que en SQLite ignora mayúsculas solo en ASCII y no ignora acentos ("prensa" no
+ * encuentra "Presión"). Techo: los acentos. Upgrade: el mismo FTS que el catálogo, con una tabla
+ * propia para las sesiones.
+ */
+export function searchSessions(q: string, opts?: { limit?: number }): SessionSummary[] {
+  const trimmed = q.trim()
+  if (!trimmed) return listSessions(opts)
+  const p = `%${escapeLike(trimmed)}%`
+  const match = sql`(
+    "session"."name" like ${p} escape '\\' or "session"."note" like ${p} escape '\\' or exists (
+      select 1 from "session_exercise"
+      join "exercise" on "exercise"."id" = "session_exercise"."exercise_id"
+      where "session_exercise"."session_id" = "session"."id"
+        and ("session_exercise"."note" like ${p} escape '\\'
+          or "exercise"."name_es" like ${p} escape '\\'
+          or "exercise"."name_en" like ${p} escape '\\')
+    ))`
+  return summaries(match, opts?.limit ?? 50)
 }

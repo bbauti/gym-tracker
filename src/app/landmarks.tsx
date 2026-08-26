@@ -77,7 +77,13 @@ export default function LandmarksScreen() {
           </Text>
         </PressableScale>
       </View>
-      <Text color="secondary" role="footnote">
+      {/* Las formas largas ya son el accessibilityLabel de cada ±: dejarla visible la lee dos veces. */}
+      <Text
+        accessibilityElementsHidden
+        color="secondary"
+        importantForAccessibility="no-hide-descendants"
+        role="footnote"
+      >
         {LEGEND}
       </Text>
 

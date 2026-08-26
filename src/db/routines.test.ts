@@ -28,6 +28,9 @@ for (const file of [
 }
 const db = drizzle(sqlite, { schema })
 mock.module('./client', () => ({ db, ready: Promise.resolve(), sqlite }))
+// `@/i18n` lee el idioma del dispositivo con expo-localization al importarse, que fuera de la app no
+// existe. Los nombres por defecto del import (D08) salen de ahí, así que acá alcanza con la key.
+mock.module('@/i18n', () => ({ locale: 'es', t: (key: string) => key }))
 
 // Dinámico a propósito: los `import` estáticos se izan por encima del `mock.module` de arriba.
 const {
@@ -39,17 +42,26 @@ const {
   deleteRoutineSet,
   duplicateRoutine,
   estimatedDurationMs,
+  exportRoutine,
+  getRoutine,
   getRoutineTree,
+  importRoutine,
   listRoutines,
+  MAX_WEEKS,
+  moveRoutineToFolder,
   removeRoutineExercise,
+  reorderDays,
   restoreRoutineExercise,
   restoreRoutineSet,
+  setWeeks,
   startSessionFromDay,
   updateDay,
   updateRoutineExercise,
   updateRoutineSet,
 } = await import('./queries/routines')
+const { createFolder, deleteFolder, restoreFolder } = await import('./queries/folders')
 const { endSession, getSessionTree } = await import('./queries/session')
+const { parseRoutineDraft } = await import('@/lib/routineText')
 
 const BENCH = 1
 const SQUAT = 2
@@ -63,12 +75,13 @@ beforeEach(() => {
     DELETE FROM routine_exercise;
     DELETE FROM routine_day;
     DELETE FROM routine;
+    DELETE FROM folder;
     DELETE FROM exercise;
     DELETE FROM sqlite_sequence;
     INSERT OR IGNORE INTO settings (id) VALUES (1);
-    INSERT INTO exercise (id, name_es, name_en, primary_muscle, equipment, metric)
-    VALUES (${BENCH}, 'Press banca', 'Bench press', 'chest', 'barbell', 'weight_reps'),
-           (${SQUAT}, 'Sentadilla', 'Squat', 'quads', 'barbell', 'weight_reps');
+    INSERT INTO exercise (id, seed_id, name_es, name_en, primary_muscle, equipment, metric)
+    VALUES (${BENCH}, 'bench_press', 'Press banca', 'Bench press', 'chest', 'barbell', 'weight_reps'),
+           (${SQUAT}, 'squat', 'Sentadilla', 'Squat', 'quads', 'barbell', 'weight_reps');
   `)
 })
 
@@ -116,9 +129,12 @@ function history(
 const dayIds = (routineId: number) =>
   (
     sqlite
-      .query('SELECT id FROM routine_day WHERE routine_id = ? ORDER BY order_index, id')
+      .query('SELECT id FROM routine_day WHERE routine_id = ? ORDER BY week_index, order_index, id')
       .all(routineId) as { id: number }[]
   ).map((r) => r.id)
+
+const dayShape = (routineId: number) =>
+  getRoutineTree(routineId)?.days.map((d) => [d.day.name, d.day.weekIndex, d.day.orderIndex])
 
 const currentIndex = (routineId: number) =>
   (
@@ -386,4 +402,186 @@ test('a session that lasted seconds does not drag the estimate to zero', () => {
 
   history(SQUAT, [{ at: 20, weightG: 100_000 }], { dayId, endedAt: 40 * 60_000, startedAt: 0 })
   expect(estimatedDurationMs(dayId)).toBe(40 * 60_000)
+})
+
+test('un programa de dos semanas rota S1D1 → S1D2 → S2D1 → S2D2 y recién ahí vuelve', () => {
+  const routineId = createRoutine('Bloque', 'S1D1')
+  setWeeks(routineId, 2)
+  addDay(routineId, 'S1D2', 0)
+  addDay(routineId, 'S2D1', 1)
+  addDay(routineId, 'S2D2', 1)
+  const days = dayIds(routineId)
+  expect(dayShape(routineId)).toEqual([
+    ['S1D1', 0, 0],
+    ['S1D2', 0, 1],
+    ['S2D1', 1, 0],
+    ['S2D2', 1, 1],
+  ])
+
+  for (const [at, expected] of [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+  ] as const) {
+    expect(listRoutines()[0].nextDay?.id).toBe(days[at])
+    endSession(startSessionFromDay(days[at]))
+    expect(currentIndex(routineId)).toBe(expected)
+  }
+})
+
+test('bajar las semanas muda los días que sobran a la última, sin borrar ninguno', () => {
+  const routineId = createRoutine('Bloque', 'A')
+  setWeeks(routineId, 3)
+  addDay(routineId, 'B', 1)
+  addDay(routineId, 'C', 2)
+  addDay(routineId, 'D', 2)
+
+  setWeeks(routineId, 2)
+  expect(getRoutine(routineId)?.weeks).toBe(2)
+  // C y D se mudan a la semana 2 (índice 1) detrás de B, y renumeran ahí adentro.
+  expect(dayShape(routineId)).toEqual([
+    ['A', 0, 0],
+    ['B', 1, 0],
+    ['C', 1, 1],
+    ['D', 1, 2],
+  ])
+
+  // Volver a una sola semana deja `weeks` en null y los días sin semana, en el mismo orden.
+  setWeeks(routineId, 1)
+  expect(getRoutine(routineId)?.weeks).toBeNull()
+  expect(dayShape(routineId)).toEqual([
+    ['A', null, 0],
+    ['B', null, 1],
+    ['C', null, 2],
+    ['D', null, 3],
+  ])
+})
+
+test('exportar e importar: el catálogo se reconoce por seedId y lo que falta entra como propio', () => {
+  const routineId = createRoutine('Fuerza', 'A')
+  const [dayId] = dayIds(routineId)
+  addRoutineExercise(dayId, BENCH)
+  const payload = exportRoutine(routineId)
+  if (!payload) throw new Error('no export')
+  expect(payload.format).toBe('gym-tracker-routine')
+  expect(payload.days[0].exercises[0].seedId).toBe('bench_press')
+  expect(payload.days[0].exercises[0].sets).toHaveLength(3)
+
+  // Un ejercicio que este teléfono no tiene: entra como propio y se cuenta en `created`.
+  payload.days[0].exercises.push({
+    nameEn: 'Odd machine',
+    nameEs: 'Máquina rara',
+    restSec: 90,
+    seedId: null,
+    sets: [{ kind: 'normal', repsMax: 10, repsMin: 10, targetRpe: null }],
+    supersetGroup: null,
+  })
+
+  const draft = parseRoutineDraft(JSON.stringify(payload))
+  if (!draft) throw new Error('no draft')
+  const { routineId: copyId, created } = importRoutine(draft, { unit: 'kg' })
+  expect(created).toEqual(['Máquina rara'])
+
+  const copy = getRoutineTree(copyId)
+  expect(copy?.routine.name).toBe('Fuerza')
+  expect(copy?.days).toHaveLength(1)
+  const [bench, odd] = copy?.days[0].exercises ?? []
+  expect(bench.re.exerciseId).toBe(BENCH)
+  expect(bench.sets).toHaveLength(3)
+  expect(odd.exercise.isCustom).toBe(true)
+  expect(odd.re.restSec).toBe(90)
+
+  // Segunda vez: el propio ya está en el catálogo y se reconoce por nombre, sin acentos ni mayúsculas.
+  payload.days[0].exercises[1].nameEs = 'MAQUINA RARA'
+  const again = parseRoutineDraft(JSON.stringify(payload))
+  if (!again) throw new Error('no draft')
+  expect(importRoutine(again, { unit: 'kg' }).created).toEqual([])
+})
+
+test('exportar e importar: cada serie vuelve con su tipo, su rango y su RPE', () => {
+  const routineId = createRoutine('Bloque', 'A')
+  const [dayId] = dayIds(routineId)
+  updateDay(dayId, { isDeload: true })
+  const reId = addRoutineExercise(dayId, BENCH)
+  sqlite
+    .query('UPDATE routine_exercise SET superset_group = 1, rest_sec = 120 WHERE id = ?')
+    .run(reId)
+  const sets = getRoutineTree(routineId)?.days[0].exercises[0].sets ?? []
+  updateRoutineSet(sets[0].id, { kind: 'warmup', repsMin: 10, repsMax: 10 })
+  updateRoutineSet(sets[1].id, { targetRpe: 8 })
+
+  const payload = exportRoutine(routineId)
+  if (!payload) throw new Error('no export')
+  const draft = parseRoutineDraft(JSON.stringify(payload))
+  if (!draft) throw new Error('no draft')
+  const { routineId: copyId } = importRoutine(draft, { unit: 'kg' })
+
+  const day = getRoutineTree(copyId)?.days[0]
+  expect(day?.day.isDeload).toBe(true)
+  const [bench] = day?.exercises ?? []
+  expect(bench.re.supersetGroup).toBe(1)
+  expect(bench.re.restSec).toBe(120)
+  // El calentamiento sigue siendo calentamiento y no se lleva su 10×10 a las series de trabajo.
+  expect(bench.sets.map((s) => [s.kind, s.repsMin, s.repsMax, s.targetRpe])).toEqual([
+    ['warmup', 10, 10, null],
+    ['normal', 8, 12, 8],
+    ['normal', 8, 12, null],
+  ])
+})
+
+test('importar no crea más semanas que las que la pantalla dibuja', () => {
+  // Una planilla con un año en la columna `week`: el parser lo lee como semana 2026.
+  const draft = parseRoutineDraft('week,day,exercise,sets,reps\n2026,A,Press banca,3,8\n')
+  if (!draft) throw new Error('no draft')
+  expect(draft.weeks).toBe(2026)
+
+  const { routineId } = importRoutine(draft, { unit: 'kg' })
+  expect(getRoutine(routineId)?.weeks).toBe(MAX_WEEKS)
+  // El día no se pierde: cae en la última semana.
+  expect(dayShape(routineId)).toEqual([['A', MAX_WEEKS - 1, 0]])
+})
+
+test('mover una rutina a una carpeta y borrar la carpeta no borra la rutina', () => {
+  const routineId = createRoutine('PPL', 'Empuje')
+  const folderId = createFolder('Fuerza')
+
+  moveRoutineToFolder(routineId, folderId)
+  expect(getRoutine(routineId)?.folderId).toBe(folderId)
+
+  const snapshot = deleteFolder(folderId)
+  expect(listRoutines()).toHaveLength(1)
+  expect(getRoutine(routineId)?.folderId).toBeNull()
+
+  restoreFolder(snapshot)
+  expect(getRoutine(routineId)?.folderId).toBe(folderId)
+
+  moveRoutineToFolder(routineId, null)
+  expect(getRoutine(routineId)?.folderId).toBeNull()
+})
+
+test('reordenar una semana no toca las otras, y la rotación sigue apuntando al mismo día', () => {
+  const routineId = createRoutine('Bloque', 'A')
+  setWeeks(routineId, 2)
+  addDay(routineId, 'B', 0)
+  addDay(routineId, 'C', 1)
+  addDay(routineId, 'D', 1)
+  const [a, b, c, d] = dayIds(routineId)
+
+  endSession(startSessionFromDay(a))
+  expect(listRoutines()[0].nextDay?.id).toBe(b)
+  expect(currentIndex(routineId)).toBe(1)
+
+  // El sortable de cada semana manda solo sus días: `orderIndex` se numera dentro de esa lista.
+  reorderDays(routineId, [b, a])
+  expect(dayShape(routineId)).toEqual([
+    ['B', 0, 0],
+    ['A', 0, 1],
+    ['C', 1, 0],
+    ['D', 1, 1],
+  ])
+  // B sigue siendo el que toca, ahora en la posición 0. Y la semana 2 quedó intacta.
+  expect(listRoutines()[0].nextDay?.id).toBe(b)
+  expect(currentIndex(routineId)).toBe(0)
+  expect(dayIds(routineId).slice(2)).toEqual([c, d])
 })

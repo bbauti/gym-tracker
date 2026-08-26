@@ -403,6 +403,11 @@ export default function SettingsScreen() {
           />
           <ListRow chevron onPress={() => router.push('/gyms')} title={t('settings.gyms')} />
           <ListRow chevron onPress={() => router.push('/body')} title={t('settings.body')} />
+          <ListRow
+            chevron
+            onPress={() => router.push('/intervals')}
+            title={t('settings.intervals')}
+          />
         </Section>
 
         {/* Exportar abre la hoja de compartir: esa hoja ES el feedback. shareAsync también resuelve

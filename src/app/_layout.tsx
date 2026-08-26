@@ -171,6 +171,14 @@ function Gate() {
           }}
         />
         <Stack.Screen
+          name="routine-move"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
           name="feedback"
           options={{
             presentation: 'formSheet',
@@ -186,12 +194,22 @@ function Gate() {
             sheetGrabberVisible: true,
           }}
         />
-        {/* Herramientas (fase 7a): cada una pone su propio título con su <Stack.Screen>. */}
+        <Stack.Screen
+          name="routine-import"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: [0.75, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        {/* Herramientas (fase 7a y 7b): cada una pone su propio título con su <Stack.Screen>. */}
         <Stack.Screen name="calculators" options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="gyms" options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="gym/[id]" options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="body" options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="body/[kind]" options={{ headerShown: true, title: '' }} />
+        <Stack.Screen name="folders" options={{ headerShown: true, title: '' }} />
+        <Stack.Screen name="intervals" options={{ headerShown: true, title: '' }} />
       </Stack>
       <ToastHost />
     </>

@@ -1,10 +1,11 @@
 /**
- * Red de seguridad del rest timer: una notificación local programada al `restEndsAt` (plan §2.6).
- * No corre nada en background — la programa el sistema y la cancelamos si volvemos antes.
+ * Red de seguridad de los timers: una notificación local programada a la hora en la que termina lo
+ * que estás esperando (plan §2.6). No corre nada en background — la programa el sistema y la
+ * cancelamos si volvemos antes.
  *
- * Único archivo que importa `expo-notifications`: el resto de la app llama estas cuatro funciones,
- * que nunca tiran (una notificación que falla no puede romper el entrenamiento) y no hacen nada
- * si el permiso está denegado.
+ * Único archivo que importa `expo-notifications`: el resto de la app llama estas funciones, que
+ * nunca tiran (una notificación que falla no puede romper el entrenamiento) y no hacen nada si el
+ * permiso está denegado.
  */
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
@@ -12,18 +13,21 @@ import { t } from '@/i18n'
 
 /** Android ≥ 8 ignora la prioridad de la notificación: manda el canal. */
 const CHANNEL_ID = 'rest'
+/** C11 tiene el suyo: silenciar los avisos de descanso no puede callar también los intervalos. */
+export const INTERVALS_CHANNEL_ID = 'intervals'
 
 /**
  * Id fijo en vez de recordar el que devuelve `schedule`: hay un solo descanso a la vez, y así
  * cancelar funciona también después de que el proceso muriera (matar la app, o que el sistema la
  * baje). Con estado en memoria, la notificación de un descanso viejo quedaba huérfana y sonaba a
- * mitad de la serie siguiente, sin nadie que pudiera cancelarla.
+ * mitad de la serie siguiente, sin nadie que pudiera cancelarla. Los intervalos (C11) hacen lo
+ * mismo con el suyo.
  */
-const NOTIFICATION_ID = 'rest-end'
+const REST_NOTIFICATION_ID = 'rest-end'
 
 let granted: boolean | null = null
-/** El canal de Android, para poder esperarlo antes de programar contra él. */
-let channel: Promise<unknown> = Promise.resolve()
+/** Los canales de Android, para poder esperarlos antes de programar contra ellos. */
+let channels: Promise<unknown> = Promise.resolve()
 
 /**
  * Todo pasa por esta cola. Tres taps rápidos en +15 s son tres reprogramaciones concurrentes: sin
@@ -55,10 +59,16 @@ export function configureNotifications(): void {
     // Sin `sound`: omitirlo es el sonido default del sistema. Poniendo `'default'` el canal busca
     // un raw resource llamado así, no lo encuentra ("Custom sound 'default' not found") y se queda
     // mudo. Lo mismo vale para el `sound: true` del contenido (Android e iOS: sonido default).
-    channel = Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: t('rest.title'),
-      importance: Notifications.AndroidImportance.HIGH,
-    }).catch(() => {})
+    channels = Promise.all([
+      Notifications.setNotificationChannelAsync(CHANNEL_ID, {
+        name: t('rest.title'),
+        importance: Notifications.AndroidImportance.HIGH,
+      }),
+      Notifications.setNotificationChannelAsync(INTERVALS_CHANNEL_ID, {
+        name: t('intervals.title'),
+        importance: Notifications.AndroidImportance.HIGH,
+      }),
+    ]).catch(() => {})
   }
 }
 
@@ -93,39 +103,53 @@ export async function ensureNotificationPermission(): Promise<boolean> {
   return granted
 }
 
-/** Cancelar un id que no está programado es un no-op, así que no hace falta saber si hay algo. */
-function cancelPending(): Promise<void> {
-  return Notifications.cancelScheduledNotificationAsync(NOTIFICATION_ID)
-}
-
 /**
- * Un solo descanso a la vez: reprogramar cancela el anterior. `endsAt` es epoch ms — el mismo número
- * que `session.rest_ends_at`, así que ±15 s es volver a llamar acá con el valor nuevo.
+ * Una notificación a una hora fija. `id` es del que llama: reprogramar con el mismo id pisa la
+ * anterior (cancelar un id que no está programado es un no-op), así que quien tiene un solo timer
+ * usa siempre el mismo y no necesita recordar nada entre arranques de la app.
+ *
+ * `at` es epoch ms, el mismo número que la fila guarda: mover el final es volver a llamar acá.
  */
-export function scheduleRestEnd(endsAt: number): Promise<void> {
+export function scheduleAt(
+  id: string,
+  at: number,
+  title: string,
+  body: string,
+  channelId: string = CHANNEL_ID,
+): Promise<void> {
   return serial(async () => {
     // El canal tiene que existir antes de programar contra él: si no, en Android la notificación
     // se pierde el HIGH y el sonido que el canal define.
-    await channel
-    await cancelPending()
+    await channels
+    await Notifications.cancelScheduledNotificationAsync(id)
     if (!(await ensureNotificationPermission())) return
     await Notifications.scheduleNotificationAsync({
-      identifier: NOTIFICATION_ID,
-      content: {
-        title: t('rest.notification.title'),
-        body: t('rest.notification.body'),
-        sound: true,
-      },
+      identifier: id,
+      content: { title, body, sound: true },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: endsAt,
-        channelId: CHANNEL_ID,
+        date: at,
+        channelId,
       },
     })
   })
 }
 
+export function cancelScheduled(id: string): Promise<void> {
+  return serial(() => Notifications.cancelScheduledNotificationAsync(id))
+}
+
+/** Un solo descanso a la vez: ±15 s es volver a llamar acá con el `session.rest_ends_at` nuevo. */
+export function scheduleRestEnd(endsAt: number): Promise<void> {
+  return scheduleAt(
+    REST_NOTIFICATION_ID,
+    endsAt,
+    t('rest.notification.title'),
+    t('rest.notification.body'),
+  )
+}
+
 /** Saltar, llegar a cero con la app abierta, terminar o descartar: la red de seguridad ya no hace falta. */
 export function cancelRestEnd(): Promise<void> {
-  return serial(cancelPending)
+  return cancelScheduled(REST_NOTIFICATION_ID)
 }

@@ -97,6 +97,27 @@ export function exerciseName(e: { nameEs: string; nameEn: string }, locale: Loca
   return locale === 'es' ? e.nameEs : e.nameEn
 }
 
+/**
+ * Nombre comparable: sin acentos, sin mayúsculas y sin espacios de más — el mismo criterio que el
+ * tokenizer del FTS (`remove_diacritics 2`), pero exacto. Lo usa el import (D08) para reconocer
+ * "Press Banca" como el "Press banca" del catálogo en vez de crear un ejercicio repetido.
+ *
+ * A mano y no con `normalize('NFD')`: Hermes no garantiza la normalización Unicode, y estas son
+ * todas las vocales acentuadas que aparecen en es y en.
+ */
+export function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[áàâä]/g, 'a')
+    .replace(/[éèêë]/g, 'e')
+    .replace(/[íìîï]/g, 'i')
+    .replace(/[óòôö]/g, 'o')
+    .replace(/[úùûü]/g, 'u')
+    .replace(/ñ/g, 'n')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function createExercise(input: {
   nameEs: string
   nameEn: string

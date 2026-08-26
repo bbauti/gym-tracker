@@ -11,7 +11,10 @@ import {
   sql,
 } from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
+import { t } from '@/i18n'
 import type { Suggestion } from '@/lib/progression'
+import type { DraftExercise, RoutineDraft } from '@/lib/routineText'
+import type { Unit } from '@/lib/units'
 import { db } from '../client'
 import {
   exercise,
@@ -24,7 +27,7 @@ import {
   sessionExercise,
   setEntry,
 } from '../schema'
-import type { Exercise } from './exercises'
+import { type Exercise, normalizeName } from './exercises'
 import { suggestFor } from './progression'
 
 export type RoutineRow = typeof routine.$inferSelect
@@ -32,7 +35,10 @@ export type RoutineDayRow = typeof routineDay.$inferSelect
 export type RoutineExerciseRow = typeof routineExercise.$inferSelect
 export type RoutineSetRow = typeof routineSet.$inferSelect
 
-/** El árbol entero de la pantalla de rutina. Todo ordenado por `orderIndex` (y `id` para desempatar). */
+/**
+ * El árbol entero de la pantalla de rutina. Los días vienen en el orden canónico (semana, después
+ * posición dentro de la semana), así que agruparlos por semana es recorrer la lista una vez.
+ */
 export type RoutineTree = {
   routine: RoutineRow
   days: Array<{
@@ -81,6 +87,16 @@ const DAY_SET_COUNT = sql<number>`(
   where "routine_exercise"."day_id" = "routine_day"."id"
 )`
 
+/**
+ * D05. El orden canónico de los días: primero la semana, después la posición dentro de ella. Un ASC
+ * de SQLite pone los NULL adelante, que es justo lo que hace falta — una rutina de una sola semana
+ * deja `week_index` en null y sus días van antes que los de cualquier semana numerada.
+ *
+ * La rotación (D10) camina este orden, así que un programa de dos semanas cicla
+ * S1D1 → S1D2 → S2D1 → S2D2 → S1D1.
+ */
+const DAY_ORDER = [asc(routineDay.weekIndex), asc(routineDay.orderIndex), asc(routineDay.id)]
+
 /** El índice guardado puede haber quedado fuera de rango (se borró un día): siempre da una posición. */
 function wrap(index: number, count: number): number {
   if (count <= 0) return 0
@@ -105,7 +121,7 @@ export function listRoutines(): RoutineSummary[] {
     })
     .from(routineDay)
     .where(inArray(routineDay.routineId, ids))
-    .orderBy(asc(routineDay.routineId), asc(routineDay.orderIndex), asc(routineDay.id))
+    .orderBy(asc(routineDay.routineId), ...DAY_ORDER)
     .all()
 
   const lastDone = db
@@ -148,7 +164,7 @@ export function getRoutineTree(id: number): RoutineTree | null {
     .select()
     .from(routineDay)
     .where(eq(routineDay.routineId, id))
-    .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
+    .orderBy(...DAY_ORDER)
     .all()
 
   const dayIds = days.map((d) => d.id)
@@ -255,7 +271,7 @@ export function duplicateRoutine(id: number, newName: string): number {
       .select()
       .from(routineDay)
       .where(eq(routineDay.routineId, id))
-      .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
+      .orderBy(...DAY_ORDER)
       .all()
 
     // ponytail: N+1 adentro de la transacción (un insert por ejercicio, para saber su id nuevo).
@@ -322,20 +338,266 @@ export function duplicateRoutine(id: number, newName: string): number {
   })
 }
 
-export function addDay(routineId: number, name: string): number {
+export type RoutineExportSet = Pick<RoutineSetRow, 'kind' | 'repsMin' | 'repsMax' | 'targetRpe'>
+
+export type RoutineExportExercise = {
+  seedId: string | null
+  nameEs: string
+  nameEn: string
+  restSec: number | null
+  supersetGroup: number | null
+  sets: RoutineExportSet[]
+}
+
+export type RoutineExportDay = {
+  name: string
+  weekIndex: number | null
+  isDeload: boolean
+  exercises: RoutineExportExercise[]
+}
+
+/**
+ * N02. Lo que sale al compartir una rutina, y lo único que `parseRoutineDraft` puede leer entero.
+ * El ejercicio viaja con su `seedId` y con los dos nombres: quien la reciba puede tener la app en
+ * el otro idioma, o no tener ese ejercicio propio.
+ */
+export type RoutineExport = {
+  format: 'gym-tracker-routine'
+  version: 1
+  name: string
+  weeks: number | null
+  days: RoutineExportDay[]
+}
+
+export function exportRoutine(id: number): RoutineExport | null {
+  const tree = getRoutineTree(id)
+  if (!tree) return null
+  return {
+    format: 'gym-tracker-routine',
+    version: 1,
+    name: tree.routine.name,
+    weeks: tree.routine.weeks,
+    days: tree.days.map(({ day, exercises }) => ({
+      name: day.name,
+      weekIndex: day.weekIndex,
+      isDeload: day.isDeload,
+      exercises: exercises.map(({ re, exercise: e, sets }) => ({
+        seedId: e.seedId,
+        nameEs: e.nameEs,
+        nameEn: e.nameEn,
+        restSec: re.restSec,
+        supersetGroup: re.supersetGroup,
+        sets: sets.map((s) => ({
+          kind: s.kind,
+          repsMin: s.repsMin,
+          repsMax: s.repsMax,
+          targetRpe: s.targetRpe,
+        })),
+      })),
+    })),
+  }
+}
+
+export type ImportResult = { routineId: number; created: string[] }
+
+/** Un archivo que pide más series que esto para un ejercicio está mal, no es ambicioso. */
+const MAX_IMPORT_SETS = 20
+
+/** D05. Ocho semanas ya es un bloque entero; más que eso no se planifica, se improvisa. */
+export const MAX_WEEKS = 8
+
+/**
+ * D08. El borrador entra en una sola transacción: o queda la rutina entera o no queda nada.
+ *
+ * El ejercicio se reconoce por `seedId` primero y por nombre exacto después (sin acentos ni
+ * mayúsculas, contra es, en y alias). Lo que no está en el catálogo se crea como ejercicio propio y
+ * se devuelve en `created`, que es lo que la pantalla cuenta al terminar.
+ *
+ * `unit` está en la firma porque el texto puede traer pesos sin unidad ("Squat 5×5 @100"), pero
+ * ninguno llega a la base: `routine_set` guarda rango de repeticiones y RPE, no peso — el peso lo
+ * sugiere el historial (§2.2). Queda en el borrador, para el preview de la pantalla.
+ */
+export function importRoutine(draft: RoutineDraft, _opts: { unit: Unit }): ImportResult {
+  return db.transaction((tx) => {
+    // Con tope: una columna `week` con un año adentro pedía 2026 semanas, y la pantalla las dibuja
+    // todas. Los días que sobran se re-acomodan solos en el clamp de `weekIndex` de más abajo.
+    const weeks = draft.weeks !== null && draft.weeks > 1 ? Math.min(draft.weeks, MAX_WEEKS) : null
+    const routineId = tx
+      .insert(routine)
+      .values({ name: draft.name?.trim() || t('routine.new'), weeks })
+      .returning({ id: routine.id })
+      .get().id
+
+    // ponytail: el catálogo entero en memoria para resolver nombres (unos cientos de filas, una sola
+    // query). Techo: un archivo con 500 ejercicios lo recorre igual. Upgrade: matchear en SQL.
+    const bySeed = new Map<string, number>()
+    const byName = new Map<string, number>()
+    const catalogue = tx
+      .select({
+        id: exercise.id,
+        seedId: exercise.seedId,
+        nameEs: exercise.nameEs,
+        nameEn: exercise.nameEn,
+        aliases: exercise.aliases,
+      })
+      .from(exercise)
+      .all()
+    for (const e of catalogue) {
+      if (e.seedId) bySeed.set(e.seedId, e.id)
+      for (const name of [e.nameEs, e.nameEn, ...(e.aliases ?? [])]) {
+        const key = normalizeName(name)
+        if (key && !byName.has(key)) byName.set(key, e.id)
+      }
+    }
+
+    const created: string[] = []
+    const resolve = (ex: DraftExercise): number => {
+      const seeded = ex.seedId ? bySeed.get(ex.seedId) : undefined
+      if (seeded !== undefined) return seeded
+      const key = normalizeName(ex.name)
+      const known = byName.get(key)
+      if (known !== undefined) return known
+
+      // Mismo nombre en los dos idiomas: no hay de dónde sacar la traducción, y una columna vacía
+      // deja al ejercicio fuera del buscador en la mitad de los teléfonos.
+      const id = tx
+        .insert(exercise)
+        .values({
+          nameEs: ex.name,
+          nameEn: ex.name,
+          primaryMuscle: 'full_body',
+          equipment: 'other',
+          metric: 'weight_reps',
+          isCustom: true,
+        })
+        .returning({ id: exercise.id })
+        .get().id
+      byName.set(key, id)
+      created.push(ex.name)
+      return id
+    }
+
+    // Cada semana numera sus días desde cero, igual que `addDay`.
+    const counts = new Map<number | null, number>()
+    for (const day of draft.days) {
+      const weekIndex = weeks === null ? null : Math.min(Math.max(0, day.weekIndex ?? 0), weeks - 1)
+      const orderIndex = counts.get(weekIndex) ?? 0
+      counts.set(weekIndex, orderIndex + 1)
+
+      const dayId = tx
+        .insert(routineDay)
+        .values({
+          routineId,
+          name: day.name.trim() || t('routine.dayDefault', { n: orderIndex + 1 }),
+          orderIndex,
+          weekIndex,
+          isDeload: day.isDeload ?? false,
+        })
+        .returning({ id: routineDay.id })
+        .get().id
+
+      day.exercises.forEach((ex, index) => {
+        const reId = tx
+          .insert(routineExercise)
+          .values({
+            dayId,
+            exerciseId: resolve(ex),
+            orderIndex: index,
+            restSec: ex.restSec ?? null,
+            supersetGroup: ex.supersetGroup ?? null,
+          })
+          .returning({ id: routineExercise.id })
+          .get().id
+
+        // El JSON de la app trae las series de verdad (tipo, rango y RPE de cada una); el texto y el
+        // CSV solo saben cuántas son, y ahí sí salen todas iguales.
+        const count = Math.min(MAX_IMPORT_SETS, Math.max(1, Math.round(ex.sets) || 1))
+        const rows = ex.setRows?.length
+          ? ex.setRows.slice(0, MAX_IMPORT_SETS).map((s, i) => ({
+              routineExerciseId: reId,
+              orderIndex: i,
+              kind: s.kind,
+              repsMin: s.repsMin,
+              repsMax: s.repsMax,
+              targetRpe: s.targetRpe,
+            }))
+          : Array.from({ length: count }, (_, i) => ({
+              routineExerciseId: reId,
+              orderIndex: i,
+              kind: 'normal' as SetKind,
+              repsMin: ex.repsMin,
+              repsMax: ex.repsMax ?? ex.repsMin,
+              targetRpe: null,
+            }))
+        tx.insert(routineSet).values(rows).run()
+      })
+    }
+
+    return { routineId, created }
+  })
+}
+
+/** `orderIndex` se cuenta DENTRO de la semana: cada semana numera sus días desde cero. */
+export function addDay(routineId: number, name: string, weekIndex: number | null = null): number {
   return db.transaction((tx) => {
     const next = tx
       .select({ n: sql<number>`coalesce(max(${routineDay.orderIndex}) + 1, 0)` })
       .from(routineDay)
-      .where(eq(routineDay.routineId, routineId))
+      .where(
+        and(
+          eq(routineDay.routineId, routineId),
+          weekIndex === null ? isNull(routineDay.weekIndex) : eq(routineDay.weekIndex, weekIndex),
+        ),
+      )
       .get()
 
     return tx
       .insert(routineDay)
-      .values({ routineId, name, orderIndex: next?.n ?? 0 })
+      .values({ routineId, name, orderIndex: next?.n ?? 0, weekIndex })
       .returning({ id: routineDay.id })
       .get().id
   })
+}
+
+/**
+ * D05. Un programa de varias semanas. `weeks` en 1 (o null) vuelve a la rutina de una sola semana y
+ * deja los días con `week_index` en null, que es como el schema dice "sin semanas".
+ *
+ * Bajar de 4 semanas a 2 NO borra nada: los días de las que se van se mudan al final de la última
+ * que queda. Perder tres días de trabajo por tocar un stepper de más sería imperdonable.
+ */
+export function setWeeks(routineId: number, weeks: number | null): void {
+  db.transaction((tx) => {
+    const row = tx.select().from(routine).where(eq(routine.id, routineId)).get()
+    if (!row) return
+    const total = weeks !== null && weeks > 1 ? weeks : null
+
+    const days = tx
+      .select()
+      .from(routineDay)
+      .where(eq(routineDay.routineId, routineId))
+      .orderBy(...DAY_ORDER)
+      .all()
+
+    // Recorrer en el orden canónico y renumerar deja la secuencia igual que estaba: la rotación
+    // sigue apuntando al mismo día sin tocar `current_day_index`.
+    const counts = new Map<number | null, number>()
+    for (const day of days) {
+      const weekIndex = total === null ? null : Math.min(day.weekIndex ?? 0, total - 1)
+      const orderIndex = counts.get(weekIndex) ?? 0
+      counts.set(weekIndex, orderIndex + 1)
+      if (weekIndex !== day.weekIndex || orderIndex !== day.orderIndex) {
+        tx.update(routineDay).set({ orderIndex, weekIndex }).where(eq(routineDay.id, day.id)).run()
+      }
+    }
+
+    tx.update(routine).set({ weeks: total }).where(eq(routine.id, routineId)).run()
+  })
+}
+
+/** D02. `null` la saca de la carpeta y la deja suelta; la carpeta no se toca. */
+export function moveRoutineToFolder(routineId: number, folderId: number | null): void {
+  db.update(routine).set({ folderId }).where(eq(routine.id, routineId)).run()
 }
 
 export function updateDay(id: number, patch: { name?: string; isDeload?: boolean }): void {
@@ -361,7 +623,7 @@ export function deleteDay(id: number): void {
         .select({ id: routineDay.id })
         .from(routineDay)
         .where(eq(routineDay.routineId, day.routineId))
-        .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
+        .orderBy(...DAY_ORDER)
         .all()
         .map((d) => d.id)
 
@@ -385,20 +647,27 @@ export function deleteDay(id: number): void {
 /**
  * Una transacción, así la lista nunca se dibuja a medio reordenar. Ids de otra rutina se ignoran.
  *
+ * `orderedDayIds` es el orden nuevo de UNA semana (cada semana tiene su propio sortable): el
+ * `orderIndex` se numera dentro de esa lista y las otras semanas no se tocan.
+ *
  * `current_day_index` es una POSICIÓN, así que arrastrar un día cambiaría cuál toca: se anota a qué
- * día apuntaba y se lo vuelve a buscar en el orden nuevo. Reordenar la lista no te saltea un día.
+ * día apuntaba y se lo vuelve a buscar en el orden que quedó. Reordenar la lista no te saltea un día.
  */
 export function reorderDays(routineId: number, orderedDayIds: number[]): void {
   db.transaction((tx) => {
     const row = tx.select().from(routine).where(eq(routine.id, routineId)).get()
-    const before = tx
-      .select({ id: routineDay.id })
-      .from(routineDay)
-      .where(eq(routineDay.routineId, routineId))
-      .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
-      .all()
+    const ordered = () =>
+      tx
+        .select({ id: routineDay.id })
+        .from(routineDay)
+        .where(eq(routineDay.routineId, routineId))
+        .orderBy(...DAY_ORDER)
+        .all()
+        .map((d) => d.id)
+
+    const before = ordered()
     const pointedAt =
-      row && before.length > 0 ? before[wrap(row.currentDayIndex, before.length)].id : null
+      row && before.length > 0 ? before[wrap(row.currentDayIndex, before.length)] : null
 
     orderedDayIds.forEach((dayId, index) => {
       tx.update(routineDay)
@@ -407,10 +676,9 @@ export function reorderDays(routineId: number, orderedDayIds: number[]): void {
         .run()
     })
 
-    // `orderedDayIds` es el orden nuevo completo (lo manda el sortable con todas las filas): si el
-    // día que tocaba no está ahí, el índice viejo sigue siendo tan bueno como cualquier otro.
-    const at = pointedAt === null ? -1 : orderedDayIds.indexOf(pointedAt)
-    if (row && at >= 0 && at !== row.currentDayIndex) {
+    if (!row || pointedAt === null) return
+    const at = ordered().indexOf(pointedAt)
+    if (at >= 0 && at !== row.currentDayIndex) {
       tx.update(routine).set({ currentDayIndex: at }).where(eq(routine.id, routineId)).run()
     }
   })
@@ -712,7 +980,7 @@ export function advanceRotation(sessionId: number, on: Db = db): void {
     .select({ id: routineDay.id })
     .from(routineDay)
     .where(eq(routineDay.routineId, day.routineId))
-    .orderBy(asc(routineDay.orderIndex), asc(routineDay.id))
+    .orderBy(...DAY_ORDER)
     .all()
 
   const at = days.findIndex((d) => d.id === day.id)

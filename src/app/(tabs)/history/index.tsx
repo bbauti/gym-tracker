@@ -1,14 +1,18 @@
 import { FlashList, type ListRenderItemInfo } from '@shopify/flash-list'
-import { router } from 'expo-router'
+import { router, Stack } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { listSessions, type SessionSummary } from '@/db/queries/history'
+import { listSessions, type SessionSummary, searchSessions } from '@/db/queries/history'
 import { getSettings } from '@/db/queries/settings'
+import { trainingDays } from '@/db/queries/stats'
 import { useQuery } from '@/db/useQuery'
 import { locale, plural, t } from '@/i18n'
 import { formatDuration, formatWeight, type Unit } from '@/lib/units'
+import Card from '@/ui/Card'
+import Chip from '@/ui/Chip'
 import EmptyState from '@/ui/EmptyState'
 import ListRow from '@/ui/ListRow'
+import MonthCalendar, { addMonths, startOfMonth } from '@/ui/MonthCalendar'
 import Text from '@/ui/Text'
 import { colors, spacing } from '@/ui/tokens'
 
@@ -26,6 +30,7 @@ const oldDayFormat = new Intl.DateTimeFormat(locale, {
   month: 'short',
   year: 'numeric',
 })
+const chipFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' })
 
 type Row =
   | { kind: 'day'; key: string; label: string }
@@ -41,6 +46,10 @@ const styles = StyleSheet.create({
     paddingTop: spacing[5],
     paddingBottom: spacing[2],
   },
+  header: { padding: spacing[4], paddingBottom: 0 },
+  // Fila propia y `flex-start`: dentro de la fila el chip se estira a todo el ancho.
+  chipRow: { flexDirection: 'row', alignItems: 'flex-start', paddingTop: spacing[3] },
+  noResults: { padding: spacing[6], textAlign: 'center' },
 })
 
 function startOfDay(ts: number): Date {
@@ -78,6 +87,10 @@ const keyExtractor = (row: Row) => row.key
 // Cabeceras y filas reciclan por separado: sin esto FlashList reusa una celda de fecha como sesión.
 const getItemType = (row: Row) => row.kind
 
+// FlashList v2 ancla el scroll al contenido visible por defecto (pensado para chats): con el
+// buscador la lista se rearma entera en cada tecla y eso pelea con el filtrado.
+const KEEP_POSITION_OFF = { disabled: true }
+
 const empty = (
   <EmptyState
     description={t('history.empty.description')}
@@ -85,6 +98,12 @@ const empty = (
     sf="clock.arrow.circlepath"
     title={t('history.empty.title')}
   />
+)
+
+const noResults = (
+  <Text color="secondary" role="callout" style={styles.noResults}>
+    {t('history.noResults')}
+  </Text>
 )
 
 function SessionRow({ summary, unit }: { summary: SessionSummary; unit: Unit }) {
@@ -125,12 +144,22 @@ function SessionRow({ summary, unit }: { summary: SessionSummary; unit: Unit }) 
 
 export default function HistoryScreen() {
   const [limit, setLimit] = useState(PAGE)
+  const [q, setQ] = useState('')
+  const [month, setMonth] = useState(() => startOfMonth(Date.now()))
+  const [day, setDay] = useState<number | null>(null)
+  const query = q.trim()
+
   const unit = useQuery(() => getSettings().unit, ['settings'])
   const page = useQuery(
-    () => listSessions({ limit }),
-    ['session', 'session_exercise', 'set_entry'],
-    [limit],
+    () =>
+      query ? searchSessions(query, { limit }) : listSessions({ limit, day: day ?? undefined }),
+    // 'exercise' también: el buscador mira los nombres del catálogo.
+    ['session', 'session_exercise', 'set_entry', 'exercise'],
+    [limit, query, day],
   )
+  // Solo los puntos del mes visible; los conteos de series del resultado no se usan acá.
+  const marks = useQuery(() => trainingDays(month, addMonths(month, 1)), ['session'], [month])
+
   const rows = buildRows(page)
 
   const renderItem = ({ item }: ListRenderItemInfo<Row>) =>
@@ -142,23 +171,86 @@ export default function HistoryScreen() {
       <SessionRow summary={item.summary} unit={unit} />
     )
 
-  if (page.length === 0) return <View style={styles.screen}>{empty}</View>
+  const search = (
+    <Stack.Screen
+      options={{
+        headerSearchBarOptions: {
+          autoCapitalize: 'none',
+          hideWhenScrolling: false,
+          onChangeText: (e) => {
+            setQ(e.nativeEvent.text)
+            setLimit(PAGE)
+          },
+          placeholder: t('history.search'),
+        },
+      }}
+    />
+  )
+
+  // Historial vacío de verdad (sin filtro ni búsqueda): el calendario no tendría nada que mostrar.
+  if (rows.length === 0 && !query && day === null) {
+    return (
+      <>
+        {search}
+        <View style={styles.screen}>{empty}</View>
+      </>
+    )
+  }
+
+  const header = (
+    <View style={styles.header}>
+      <Card>
+        <MonthCalendar
+          days={marks}
+          month={month}
+          onMonthChange={setMonth}
+          onSelect={(picked) => {
+            // Volver a tocar el día seleccionado limpia el filtro.
+            setDay(picked === day ? null : picked)
+            setLimit(PAGE)
+          }}
+          selected={day}
+        />
+      </Card>
+      {day === null ? null : (
+        <View style={styles.chipRow}>
+          <Chip
+            accessibilityLabel={`${chipFormat.format(day)}, ${t('history.clearDay')}`}
+            label={`${chipFormat.format(day)} ✕`}
+            onPress={() => {
+              setDay(null)
+              setLimit(PAGE)
+            }}
+            selected
+          />
+        </View>
+      )}
+    </View>
+  )
 
   // Sin layout animations: el historial solo crece por el final y animar filas mientras se
   // scrollea es exactamente lo que §7.5 rechaza.
   return (
-    <FlashList
-      contentInsetAdjustmentBehavior="automatic"
-      data={rows}
-      extraData={unit}
-      getItemType={getItemType}
-      keyExtractor={keyExtractor}
-      // Sin esto el historial se queda en las 50 más nuevas para siempre.
-      onEndReached={() => {
-        if (page.length >= limit) setLimit(limit + PAGE)
-      }}
-      renderItem={renderItem}
-      style={styles.list}
-    />
+    <>
+      {search}
+      <FlashList
+        // Buscando, el calendario se va: la lista deja de ser "los días" y pasa a ser el resultado.
+        ListEmptyComponent={noResults}
+        ListHeaderComponent={query ? undefined : header}
+        contentInsetAdjustmentBehavior="automatic"
+        data={rows}
+        extraData={unit}
+        getItemType={getItemType}
+        keyExtractor={keyExtractor}
+        keyboardDismissMode="on-drag"
+        maintainVisibleContentPosition={KEEP_POSITION_OFF}
+        // Sin esto el historial se queda en las 50 más nuevas para siempre.
+        onEndReached={() => {
+          if (page.length >= limit) setLimit(limit + PAGE)
+        }}
+        renderItem={renderItem}
+        style={styles.list}
+      />
+    </>
   )
 }

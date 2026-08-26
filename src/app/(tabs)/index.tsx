@@ -3,6 +3,7 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { listFolders } from '@/db/queries/folders'
 import { deloadState, dismissDeload, endDeload, startDeload } from '@/db/queries/progression'
 import { listRoutines, type RoutineSummary, startSessionFromDay } from '@/db/queries/routines'
 import { createSession, getActiveSessionId, getSessionTree } from '@/db/queries/session'
@@ -29,6 +30,7 @@ const SESSION_TABLES = ['session']
 // tab está atrás y useQuery difiere el re-run hasta que volvés (ver db/useQuery.ts): al volver del
 // entrenamiento la rotación, la estimación y el "última vez" se recalculan de una sola pasada.
 const ROUTINE_TABLES = [
+  'folder',
   'routine',
   'routine_day',
   'routine_exercise',
@@ -52,12 +54,17 @@ const styles = StyleSheet.create({
   content: { flexGrow: 1, gap: spacing[4], padding: spacing[4] },
   emptyBox: { justifyContent: 'center', minHeight: 240 },
   current: { gap: spacing[1] },
+  sectionRow: { alignItems: 'center', flexDirection: 'row', minHeight: MIN_TARGET },
   sectionTitle: {
+    flex: 1,
     letterSpacing: 0.4,
-    paddingBottom: spacing[2],
     paddingHorizontal: spacing[2],
     textTransform: 'uppercase',
   },
+  // El hitSlop de PressableScale no alcanza: en Android el toque se recorta a los límites del
+  // padre. La fila mide 44 pt (igual en TODOS los encabezados) y el botón la llena.
+  sectionAction: { justifyContent: 'center', minHeight: MIN_TARGET, paddingHorizontal: spacing[2] },
+  folderEmpty: { paddingBottom: spacing[1], paddingHorizontal: spacing[2] },
   routines: { gap: spacing[3] },
   card: { gap: spacing[2] },
   cardHead: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
@@ -73,6 +80,15 @@ const styles = StyleSheet.create({
   rowCard: { borderRadius: radius.md, overflow: 'hidden' },
   hideSeparator: { marginBottom: -StyleSheet.hairlineWidth },
   footer: { padding: spacing[4], paddingTop: 0 },
+  footerRow: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
+  // PressableScale aplica `style` a su vista INTERNA: el flex tiene que ir en la que envuelve.
+  grow: { flex: 1 },
+  textButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: MIN_TARGET,
+    paddingHorizontal: spacing[3],
+  },
 })
 
 /**
@@ -138,6 +154,40 @@ function Badge({ label }: { label: string }) {
   )
 }
 
+/** Encabezado de sección: el de ROUTINES lleva además el acceso a las carpetas (D02). */
+function SectionHeader({
+  title,
+  action,
+}: {
+  title: string
+  action?: { title: string; onPress: () => void }
+}) {
+  return (
+    <View style={styles.sectionRow}>
+      <Text
+        accessibilityRole="header"
+        color="secondary"
+        numberOfLines={1}
+        role="footnote"
+        style={styles.sectionTitle}
+      >
+        {title}
+      </Text>
+      {action ? (
+        <PressableScale
+          accessibilityLabel={action.title}
+          onPress={action.onPress}
+          style={styles.sectionAction}
+        >
+          <Text color="tint" role="footnote">
+            {action.title}
+          </Text>
+        </PressableScale>
+      ) : null}
+    </View>
+  )
+}
+
 /**
  * El cuerpo de la card abre la rutina y el botón la empieza: son dos elementos accesibles separados
  * a propósito. Anidar el botón adentro del pressable del cuerpo lo escondería del lector (un
@@ -145,8 +195,14 @@ function Badge({ label }: { label: string }) {
  */
 function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean }) {
   const { routine, nextDay, dayCount, lastDoneAt, estimatedMs } = summary
+  // D05: en un programa de varias semanas el nombre del día no alcanza — "Push" está en las dos.
+  const weekDay =
+    nextDay && (routine.weeks ?? 1) > 1
+      ? t('routine.weekDay', { day: nextDay.orderIndex + 1, week: (nextDay.weekIndex ?? 0) + 1 })
+      : null
   const next = nextDay
     ? [
+        weekDay,
         nextDay.name,
         plural(
           nextDay.exerciseCount,
@@ -220,7 +276,10 @@ function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean
 export default function TrainScreen() {
   const insets = useSafeAreaInsets()
   const current = useQuery(activeSession, SESSION_TABLES)
-  const routines = useQuery(listRoutines, ROUTINE_TABLES)
+  const { folders, routines } = useQuery(
+    () => ({ folders: listFolders(), routines: listRoutines() }),
+    ROUTINE_TABLES,
+  )
   // La ventana del deload la corre el reloj, no una escritura: si vence con la app abierta el cartel
   // se queda hasta la próxima serie. Un timer a 1 Hz para eso sería el peor cambio de la app.
   const deload = useQuery(() => deloadState(Date.now()), DELOAD_TABLES)
@@ -240,6 +299,28 @@ export default function TrainScreen() {
     ? formatDuration(elapsedMs(current.startedAt, current.pausedMs, current.pausedAt, now))
     : ''
   const busy = current !== null
+
+  // D02: las carpetas son cajones para mirar, no cambian en qué orden se entrena. Una rutina sin
+  // carpeta (o cuya carpeta se borró: el FK dejó null) cae en el grupo de siempre.
+  const byFolder = new Map<number, RoutineSummary[]>()
+  const loose: RoutineSummary[] = []
+  for (const summary of routines) {
+    const folderId = summary.routine.folderId
+    if (folderId === null) loose.push(summary)
+    else {
+      const list = byFolder.get(folderId)
+      if (list) list.push(summary)
+      else byFolder.set(folderId, [summary])
+    }
+  }
+  const cards = (list: RoutineSummary[]) =>
+    // Sin animación de lista: solo el FadeIn de la rutina que entra (§7.5) — las que ya estaban al
+    // abrir la tab no animan, o volver del entrenamiento se lee como carga.
+    list.map((summary) => (
+      <Animated.View entering={fadeIn(summary.routine.id)} key={summary.routine.id}>
+        <RoutineCard busy={busy} summary={summary} />
+      </Animated.View>
+    ))
 
   return (
     <View style={[styles.screen, { paddingBottom: insets.bottom, paddingTop: insets.top }]}>
@@ -301,46 +382,60 @@ export default function TrainScreen() {
           />
         ) : null}
 
+        {/* El dibujo solo cuando no hay nada, y sin botón propio: las dos filas de abajo son las
+            acciones, y una de ellas es la única puerta a importar (D08) — en una instalación
+            recién hecha, que es justo cuando pegar la rutina del entrenador importa más. */}
         {routines.length === 0 ? (
           <View style={styles.emptyBox}>
             <EmptyState
-              action={{ onPress: () => router.push('/routine/new'), title: t('routine.new') }}
               description={t('routine.empty.description')}
               md="event_repeat"
               sf="list.bullet.rectangle"
               title={t('routine.empty.title')}
             />
           </View>
-        ) : (
-          <View>
-            <Text
-              accessibilityRole="header"
-              color="secondary"
-              role="footnote"
-              style={styles.sectionTitle}
-            >
-              {t('routine.title')}
-            </Text>
-            <View style={styles.routines}>
-              {/* Sin animación de lista: solo el FadeIn de la rutina que entra (§7.5) — las que ya
-                  estaban al abrir la tab no animan, o volver del entrenamiento se lee como carga. */}
-              {routines.map((summary) => (
-                <Animated.View entering={fadeIn(summary.routine.id)} key={summary.routine.id}>
-                  <RoutineCard busy={busy} summary={summary} />
-                </Animated.View>
-              ))}
-              <View style={styles.rowCard}>
-                <View style={styles.hideSeparator}>
-                  <ListRow
-                    chevron
-                    onPress={() => router.push('/routine/new')}
-                    title={t('routine.new')}
-                  />
-                </View>
+        ) : null}
+
+        {folders.map((folder) => {
+          const list = byFolder.get(folder.id) ?? []
+          return (
+            <View key={folder.id}>
+              <SectionHeader title={folder.name} />
+              {/* Una carpeta vacía se sigue mostrando: es dónde soltar la próxima rutina. */}
+              {list.length === 0 ? (
+                <Text color="tertiary" role="footnote" style={styles.folderEmpty}>
+                  {t('folders.empty')}
+                </Text>
+              ) : (
+                <View style={styles.routines}>{cards(list)}</View>
+              )}
+            </View>
+          )
+        })}
+
+        <View>
+          <SectionHeader
+            action={{ onPress: () => router.push('/folders'), title: t('folders.manage') }}
+            title={t('routine.title')}
+          />
+          <View style={styles.routines}>
+            {cards(loose)}
+            <View style={styles.rowCard}>
+              <ListRow
+                chevron
+                onPress={() => router.push('/routine/new')}
+                title={t('routine.new')}
+              />
+              <View style={styles.hideSeparator}>
+                <ListRow
+                  chevron
+                  onPress={() => router.push('/routine-import')}
+                  title={t('import.title')}
+                />
               </View>
             </View>
           </View>
-        )}
+        </View>
       </ScrollView>
 
       {/* El entrenamiento libre baja a acción secundaria cuando hay rutinas, y con una sesión
@@ -348,12 +443,24 @@ export default function TrainScreen() {
           card de "Continuar". Esta barra está fija abajo, así que un botón apagado acá sería el
           control muerto más visible de la app. */}
       {busy ? null : (
-        <View style={styles.footer}>
-          <Button
-            onPress={() => openSession(createSession)}
-            title={routines.length === 0 ? t('session.start') : t('routine.freeWorkout')}
-            variant={routines.length === 0 ? 'filled' : 'plain'}
-          />
+        <View style={[styles.footer, styles.footerRow]}>
+          <View style={styles.grow}>
+            <Button
+              onPress={() => openSession(createSession)}
+              title={routines.length === 0 ? t('session.start') : t('routine.freeWorkout')}
+              variant={routines.length === 0 ? 'filled' : 'plain'}
+            />
+          </View>
+          {/* C11: al lado y no en su propia fila — es una herramienta, no una forma de entrenar. */}
+          <PressableScale
+            accessibilityLabel={t('intervals.title')}
+            onPress={() => router.push('/intervals')}
+            style={styles.textButton}
+          >
+            <Text color="tint" role="headline">
+              {t('intervals.title')}
+            </Text>
+          </PressableScale>
         </View>
       )}
     </View>

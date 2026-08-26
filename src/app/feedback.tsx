@@ -57,7 +57,7 @@ function Row<V extends number>({
 }) {
   return (
     <View style={styles.row}>
-      <Text color="secondary" role="footnote">
+      <Text accessibilityRole="header" color="secondary" role="footnote">
         {label}
       </Text>
       <View style={styles.chips}>
