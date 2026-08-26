@@ -1,0 +1,382 @@
+import { router, Stack, useLocalSearchParams } from 'expo-router'
+import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
+import { Alert, StyleSheet, View } from 'react-native'
+import Animated, { FadeIn, useAnimatedRef } from 'react-native-reanimated'
+import { exerciseName } from '@/db/queries/exercises'
+import {
+  addRoutineSet,
+  deleteDay,
+  deleteRoutineSet,
+  getRoutineDay,
+  getRoutineTree,
+  type RoutineSetRow,
+  type RoutineTree,
+  removeRoutineExercise,
+  reorderRoutineExercises,
+  restoreRoutineExercise,
+  restoreRoutineSet,
+  updateRoutineExercise,
+} from '@/db/queries/routines'
+import { useQuery } from '@/db/useQuery'
+import { locale, t } from '@/i18n'
+import Button from '@/ui/Button'
+import Card from '@/ui/Card'
+import EmptyState from '@/ui/EmptyState'
+import { haptic } from '@/ui/haptics'
+import Menu, { type MenuItem } from '@/ui/Menu'
+import { RowLayout } from '@/ui/motion'
+import PressableScale from '@/ui/PressableScale'
+import Sortable from '@/ui/Sortable'
+import SwipeRow from '@/ui/SwipeRow'
+import Text from '@/ui/Text'
+import { toast } from '@/ui/Toast'
+import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+
+type DayEntry = RoutineTree['days'][number]
+type ExerciseEntry = DayEntry['exercises'][number]
+
+const DAY_TABLES = ['routine', 'routine_day', 'routine_exercise', 'routine_set', 'exercise']
+
+/** Los descansos que se eligen de verdad. Lo fino se ajusta en el ejercicio, no en la rutina. */
+const REST_OPTIONS = [60, 90, 120, 180]
+
+const DAY_MENU: MenuItem[] = [
+  { key: 'edit', label: t('routine.rename'), md: 'edit', sf: 'pencil' },
+  { destructive: true, key: 'delete', label: t('common.delete'), md: 'delete', sf: 'trash' },
+]
+
+// ponytail: `rest_sec` se guarda pero la sesión todavía usa `exercise.default_rest_sec` — no hay
+// columna en `session_exercise` donde copiarlo al pre-cargar el día. Techo: el descanso de la rutina
+// es informativo. Upgrade: migración con `session_exercise.rest_sec` + copiarlo en startSessionFromDay.
+const EXERCISE_MENU: MenuItem[] = [
+  ...REST_OPTIONS.map((n) => ({ key: `rest:${n}`, label: t('day.rest', { n }) })),
+  { destructive: true, key: 'remove', label: t('common.delete'), md: 'delete', sf: 'trash' },
+]
+
+const styles = StyleSheet.create({
+  screen: { backgroundColor: colors.groupedBackground, flex: 1 },
+  // Sin `gap`: la separación entre cards vive adentro de `cardSlot` porque el hueco de la card
+  // levantada tiene que viajar con ella (ver ui/Sortable.tsx).
+  content: { padding: spacing[4] },
+  cardSlot: { paddingBottom: spacing[4] },
+  empty: { marginBottom: spacing[4], minHeight: 240 },
+  deload: {
+    backgroundColor: colors.fill,
+    borderRadius: radius.md,
+    gap: spacing[1],
+    marginBottom: spacing[4],
+    overflow: 'hidden',
+    padding: spacing[3],
+  },
+  card: { gap: spacing[1] },
+  cardHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
+  cardTitle: { flex: 1 },
+  more: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: MIN_TARGET,
+    width: MIN_TARGET,
+  },
+  setRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing[2],
+    minHeight: MIN_TARGET,
+    paddingRight: spacing[1],
+  },
+  index: { textAlign: 'center', width: 22 },
+  kind: {
+    backgroundColor: colors.fill,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[1] / 2,
+  },
+  reps: { flex: 1 },
+  addSet: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
+})
+
+/** Dos queries y no una: el árbol se pide por rutina y la pantalla solo tiene el id del día. */
+function readDay(dayId: number): DayEntry | null {
+  const row = getRoutineDay(dayId)
+  if (!row) return null
+  // ponytail: trae la rutina entera para dibujar un día. Techo: 6 días × 8 ejercicios son ~150 filas
+  // en una pantalla que se abre a mano. Upgrade: getDayTree(dayId) en db/queries/routines.ts.
+  return getRoutineTree(row.routineId)?.days.find((d) => d.day.id === dayId) ?? null
+}
+
+/** "8–12 reps", "10 reps" o "—" si la serie no pide nada (D06). */
+function repsText(set: RoutineSetRow): string {
+  const { repsMin: lo, repsMax: hi } = set
+  if (lo !== null && hi !== null && lo !== hi) return t('day.reps', { max: hi, min: lo })
+  const n = lo ?? hi
+  return n === null ? '—' : t('day.repsSingle', { n })
+}
+
+const keyOfExercise = (item: ExerciseEntry) => String(item.re.id)
+
+/**
+ * El editor de un día de la rutina (D04/D06/D07): ejercicios reordenables, cada uno con sus series
+ * objetivo. Todo lo que se toca acá es plantilla — la app sugiere, nunca aplica (§2.2).
+ */
+export default function RoutineDayScreen() {
+  const params = useLocalSearchParams<{ id: string }>()
+  const dayId = Number(params.id)
+  const data = useQuery(() => (Number.isFinite(dayId) ? readDay(dayId) : null), DAY_TABLES, [dayId])
+  // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
+  const scrollRef = useAnimatedRef<Animated.ScrollView>()
+
+  // Recién borrado (el día o la rutina entera desde otra pantalla): no hay nada que dibujar.
+  if (!data) return null
+  const { day, exercises } = data
+
+  const handleDayMenu = (key: string) => {
+    if (key === 'edit') {
+      router.push({ params: { dayId }, pathname: '/routine-edit' })
+      return
+    }
+    // La única confirmación de la fase es la de borrar una rutina (§7.5), pero un día se lleva sus
+    // ejercicios y `deleteDay` no devuelve con qué deshacerlo: acá el diálogo es el undo.
+    Alert.alert(day.name, undefined, [
+      { style: 'cancel', text: t('common.cancel') },
+      {
+        onPress: () => {
+          haptic('delete')
+          deleteDay(dayId)
+          router.back()
+        },
+        style: 'destructive',
+        text: t('common.delete'),
+      },
+    ])
+  }
+
+  const handleExerciseMenu = (reId: number, key: string) => {
+    if (key !== 'remove') {
+      updateRoutineExercise(reId, { restSec: Number(key.split(':')[1]) })
+      return
+    }
+    // Sin diálogo (§7.5): se quita y queda el toast, que devuelve la card entera con sus series.
+    haptic('delete')
+    const removed = removeRoutineExercise(reId)
+    if (!removed) return
+    toast.show({
+      actionLabel: t('common.undo'),
+      onAction: () => {
+        haptic('undo')
+        restoreRoutineExercise(removed)
+      },
+      text: t('day.exerciseRemoved'),
+    })
+  }
+
+  const handleDeleteSet = (setId: number) => {
+    haptic('delete')
+    const removed = deleteRoutineSet(setId)
+    toast.show({
+      actionLabel: t('common.undo'),
+      onAction: () => {
+        haptic('undo')
+        restoreRoutineSet(removed)
+      },
+      text: t('day.setRemoved'),
+    })
+  }
+
+  return (
+    <View style={styles.screen}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Menu items={DAY_MENU} onSelect={handleDayMenu}>
+              <View
+                accessible
+                accessibilityLabel={t('common.more')}
+                accessibilityRole="button"
+                style={styles.more}
+              >
+                <SymbolView
+                  fallback={
+                    <Text color="tint" role="title">
+                      ⋯
+                    </Text>
+                  }
+                  name={{
+                    ios: 'ellipsis.circle' as SFSymbol,
+                    android: 'more_horiz' as AndroidSymbol,
+                  }}
+                  size={22}
+                  tintColor={colors.tint}
+                />
+              </View>
+            </Menu>
+          ),
+          title: day.name,
+        }}
+      />
+      <Animated.ScrollView
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic"
+        ref={scrollRef}
+        // El auto-scroll del sortable lee el offset con `useScrollViewOffset`, y sin esto RN manda
+        // el evento una sola vez por gesto: arrastrar contra el borde no scrollearía.
+        scrollEventThrottle={16}
+      >
+        {day.isDeload ? (
+          <View style={styles.deload}>
+            <Text color="tint" role="headline">
+              {t('day.deload')}
+            </Text>
+            <Text color="secondary" role="footnote">
+              {t('day.deloadHint')}
+            </Text>
+          </View>
+        ) : null}
+        {exercises.length === 0 ? (
+          <View style={styles.empty}>
+            <EmptyState
+              md="fitness_center"
+              sf="figure.strengthtraining.traditional"
+              title={t('day.empty')}
+            />
+          </View>
+        ) : (
+          <Sortable
+            data={exercises}
+            keyExtractor={keyOfExercise}
+            onReorder={(keys) => reorderRoutineExercises(dayId, keys.map(Number))}
+            renderItem={(item) => (
+              // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
+              <Animated.View entering={FadeIn.duration(200)} style={styles.cardSlot}>
+                <ExerciseCard
+                  item={item}
+                  onDeleteSet={handleDeleteSet}
+                  onMenu={handleExerciseMenu}
+                />
+              </Animated.View>
+            )}
+            scrollableRef={scrollRef}
+          />
+        )}
+        <Button
+          md="add"
+          onPress={() => router.push({ params: { dayId }, pathname: '/pick-exercise' })}
+          sf="plus"
+          title={t('day.addExercise')}
+          variant="tinted"
+        />
+      </Animated.ScrollView>
+    </View>
+  )
+}
+
+type CardProps = {
+  item: ExerciseEntry
+  onMenu: (reId: number, key: string) => void
+  onDeleteSet: (setId: number) => void
+}
+
+function ExerciseCard({ item, onMenu, onDeleteSet }: CardProps) {
+  const { re, exercise, sets } = item
+  const name = exerciseName(exercise, locale)
+
+  return (
+    <Card style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardTitle}>
+          <Text numberOfLines={2} role="headline">
+            {name}
+          </Text>
+          {re.restSec === null ? null : (
+            <Text color="secondary" role="footnote">
+              {t('day.rest', { n: re.restSec })}
+            </Text>
+          )}
+        </View>
+        <Menu items={EXERCISE_MENU} onSelect={(key) => onMenu(re.id, key)}>
+          <View
+            accessible
+            accessibilityLabel={`${t('common.more')}, ${name}`}
+            accessibilityRole="button"
+            style={styles.more}
+          >
+            <SymbolView
+              fallback={
+                <Text color="tint" role="title">
+                  ⋯
+                </Text>
+              }
+              name={{ ios: 'ellipsis.circle' as SFSymbol, android: 'more_horiz' as AndroidSymbol }}
+              size={22}
+              tintColor={colors.tint}
+            />
+          </View>
+        </Menu>
+      </View>
+      {/* El hueco que deja una serie borrada lo cierra RowLayout — es la única región de la card
+          con layout animation, y las filas no se arrastran (lo que se arrastra es la card). */}
+      {sets.map((set, index) => (
+        <Animated.View entering={FadeIn.duration(200)} key={set.id} layout={RowLayout}>
+          <SwipeRow onDelete={() => onDeleteSet(set.id)}>
+            <SetTargetRow index={index} set={set} />
+          </SwipeRow>
+        </Animated.View>
+      ))}
+      <PressableScale
+        accessibilityLabel={t('session.addSet')}
+        onPress={() => addRoutineSet(re.id)}
+        scale={0.98}
+        style={styles.addSet}
+      >
+        <Text color="tint" role="callout">
+          {t('session.addSet')}
+        </Text>
+      </PressableScale>
+    </Card>
+  )
+}
+
+/** Una serie objetivo: "1 · Entrada en calor · 8–12 reps · RPE 8". Toda la fila abre la hoja. */
+function SetTargetRow({ index, set }: { index: number; set: RoutineSetRow }) {
+  const reps = repsText(set)
+  const rpe = set.targetRpe === null ? null : `${t('session.rpe')} ${set.targetRpe}`
+  const kind = set.kind === 'normal' ? null : t(`setKind.${set.kind}`)
+
+  return (
+    <PressableScale
+      accessibilityLabel={[`${index + 1}`, kind, reps, rpe].filter(Boolean).join(', ')}
+      onPress={() => router.push({ params: { id: set.id }, pathname: '/routine-set' })}
+      scale={0.98}
+      style={styles.setRow}
+    >
+      <Text color="secondary" role="footnote" style={styles.index} tabular>
+        {index + 1}
+      </Text>
+      {kind === null ? null : (
+        <View style={styles.kind}>
+          <Text color="tint" numberOfLines={1} role="caption">
+            {kind}
+          </Text>
+        </View>
+      )}
+      <Text numberOfLines={1} style={styles.reps}>
+        {reps}
+      </Text>
+      {rpe === null ? null : (
+        <Text color="secondary" role="footnote" tabular>
+          {rpe}
+        </Text>
+      )}
+      <SymbolView
+        fallback={
+          <Text color="tertiary" role="body">
+            ›
+          </Text>
+        }
+        name={{ ios: 'chevron.right' as SFSymbol, android: 'chevron_right' as AndroidSymbol }}
+        size={14}
+        tintColor={colors.tertiaryLabel}
+      />
+    </PressableScale>
+  )
+}

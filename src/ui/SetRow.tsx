@@ -31,7 +31,8 @@ type Props = {
   resumeKey: number
   /** `pageY` = dónde cayó el dedo: la pantalla lo usa para subir la fila por encima del numpad. */
   onFocus: (f: Field, pageY: number) => void
-  onComplete: () => void
+  /** `pageY` = dónde cayó el dedo: si la serie no se puede completar, la pantalla enfoca las reps. */
+  onComplete: (pageY: number) => void
   onKindPress: () => void
 }
 
@@ -98,6 +99,44 @@ function formatField(field: Field, set: Row | null, unit: Unit, locale: Locale):
   return n === null ? null : nf(locale).format(n)
 }
 
+/** El objetivo de repeticiones que trajo el día de rutina (D06): "8–12", o "10" si es uno solo. */
+function targetReps(set: Row): string | null {
+  const { targetRepsMin: min, targetRepsMax: max } = set
+  if (min === null && max === null) return null
+  if (min !== null && max !== null && min !== max) return `${min}–${max}`
+  return String(min ?? max)
+}
+
+/**
+ * Lo terciario de la celda cuando no hay valor real ni draft. Precedencia: sugerido (§2.2, la app
+ * sugiere y el tilde confirma) > lo de la vez anterior > el objetivo del día, que es el único que
+ * NO se confirma solo: completar sin repeticiones lo rebota (ver la pantalla).
+ */
+function ghostOf(
+  field: Field,
+  set: Row,
+  prev: Row | null,
+  unit: Unit,
+  locale: Locale,
+): string | null {
+  if (field === 'weight' && set.suggestedWeightG !== null)
+    return formatWeight(set.suggestedWeightG, unit, locale, { withUnit: false })
+  const previous = formatField(field, prev, unit, locale)
+  if (previous !== null) return previous
+  return field === 'reps' ? targetReps(set) : null
+}
+
+/**
+ * El mismo fantasma en número: de ahí arrancan ± y backspace en el numpad.
+ * ponytail: el objetivo (un rango) no entra acá. Techo: con "8–12" en fantasma, + da 1 y no 9.
+ * Upgrade: arrancar del mínimo cuando la celda está mostrando el objetivo.
+ */
+export function ghostNumber(field: Field, set: Row, prev: Row | null, unit: Unit): number | null {
+  if (field === 'weight' && set.suggestedWeightG !== null)
+    return Math.round(gToUnit(set.suggestedWeightG, unit) * 100) / 100
+  return fieldNumber(field, prev, unit)
+}
+
 export function fieldLabel(field: Field, unit: Unit): string {
   return field === 'weight' ? t(unit === 'kg' ? 'session.kg' : 'session.lb') : t(`session.${field}`)
 }
@@ -162,11 +201,21 @@ type CellProps = {
 
 function Cell({ index, field, set, prev, unit, locale, focused, draft, onFocus }: CellProps) {
   const own = formatField(field, set, unit, locale)
-  const ghost = formatField(field, prev, unit, locale)
+  const ghost = own === null ? ghostOf(field, set, prev, unit, locale) : null
   // El draft se escribe con punto y se muestra con el separador del idioma.
   const typed = locale === 'es' ? draft.replace('.', ',') : draft
   const shown = focused && draft !== '' ? typed : (own ?? ghost ?? EMPTY)
   const tone = focused ? 'tint' : own !== null ? 'primary' : 'tertiary'
+  // El objetivo se lee como objetivo: en fantasma la celda dice "8–12" a secas y el lector no
+  // aclararía qué es ese número. Si la celda ya está mostrando el rango, el aviso lo reemplaza en
+  // vez de repetirlo. Solo el rango: un objetivo de un número suelto se lee como cualquier valor.
+  const { targetRepsMin: min, targetRepsMax: max } = set
+  const range = field === 'reps' ? targetReps(set) : null
+  const hint =
+    min !== null && max !== null && min !== max && range !== null
+      ? t('session.targetHint', { max, min })
+      : null
+  const value = hint === null ? shown : shown === range ? hint : `${shown}, ${hint}`
 
   return (
     <View style={styles.slot}>
@@ -174,7 +223,7 @@ function Cell({ index, field, set, prev, unit, locale, focused, draft, onFocus }
         // Sin el número la card entera suena a cinco "kg" iguales y no se sabe qué fila se edita.
         accessibilityLabel={`${index + 1}. ${fieldLabel(field, unit)}`}
         accessibilityState={{ selected: focused }}
-        accessibilityValue={{ text: shown }}
+        accessibilityValue={{ text: value }}
         onPress={(e) => onFocus(field, e.nativeEvent.pageY)}
         scale={0.94}
         style={[styles.cell, focused && styles.cellFocused]}
@@ -281,7 +330,7 @@ export default function SetRow({
         accessibilityLabel={`${index + 1}. ${t('session.completeSet')}`}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: done }}
-        onPress={onComplete}
+        onPress={(e) => onComplete(e.nativeEvent.pageY)}
         style={styles.check}
       >
         <View style={styles.box}>

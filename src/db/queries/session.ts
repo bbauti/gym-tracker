@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, notExists, sql } from 'drizzle-orm
 import { db } from '../client'
 import { exercise, session, sessionExercise, setEntry } from '../schema'
 import type { Exercise } from './exercises'
+import { advanceRotation } from './routines'
 
 export type SessionRow = typeof session.$inferSelect
 export type SessionExerciseRow = typeof sessionExercise.$inferSelect
@@ -243,6 +244,9 @@ export function resumeSession(id: number): void {
 /**
  * Closes the workout and sweeps the scaffolding: the empty set every exercise is born with, and the
  * exercises that end up with none. A set the user typed into but never ticked survives — it is data.
+ *
+ * Si la sesión salió de un día de rutina, terminarla también corre la rotación (D10) — en esta misma
+ * transacción, así no existe el estado "terminada pero sin rotar".
  */
 export function endSession(id: number): void {
   db.transaction((tx) => {
@@ -297,6 +301,8 @@ export function endSession(id: number): void {
       })
       .where(eq(session.id, id))
       .run()
+
+    advanceRotation(id, tx)
   })
 }
 

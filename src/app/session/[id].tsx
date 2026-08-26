@@ -63,7 +63,7 @@ import { RowLayout, Spring } from '@/ui/motion'
 import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
 import RestTimer, { useNow } from '@/ui/RestTimer'
-import SetRow, { fieldLabel, fieldNumber, hasValue, SET_COLUMNS } from '@/ui/SetRow'
+import SetRow, { fieldLabel, fieldNumber, ghostNumber, hasValue, SET_COLUMNS } from '@/ui/SetRow'
 import Sortable from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
@@ -84,6 +84,12 @@ const PAD_GUESS = 400
 const SCREEN_H = Dimensions.get('window').height
 /** Lo que tiene que quedar libre bajo el dedo al enfocar: la fila entera (56) y un respiro. */
 const ROW_CLEARANCE = 56 + spacing[4]
+// ponytail: el ToastHost es un overlay del layout raíz y se dibuja SOBRE el numpad, así que
+// mientras está puesto tapa (y se come los taps de) la última fila de teclas — el 0 y el ✓, justo
+// lo que hay que tocar después de este aviso. Por eso dura 2 s y no los 4 s del default (con lector
+// de pantalla el ToastHost lo triplica solo). Techo: dos segundos de tecla muerta.
+// Upgrade: que ToastHost acepte un inset de abajo y la pantalla le pase `padHeight`.
+const NEED_REPS_TOAST_MS = 2000
 
 const EXERCISE_MENU: MenuItem[] = [
   { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
@@ -460,7 +466,8 @@ export default function SessionScreen() {
           putDraft(typed.slice(0, -1))
           return
         }
-        const n = fieldNumber(field, target.set, unit) ?? fieldNumber(field, ghost, unit)
+        const n =
+          fieldNumber(field, target.set, unit) ?? ghostNumber(field, target.set, ghost, unit)
         putDraft(n === null ? '' : String(n).slice(0, -1))
         return
       }
@@ -475,7 +482,9 @@ export default function SessionScreen() {
         const base =
           typed !== ''
             ? Number(typed.replace(',', '.'))
-            : (fieldNumber(field, target.set, unit) ?? fieldNumber(field, ghost, unit) ?? 0)
+            : (fieldNumber(field, target.set, unit) ??
+              ghostNumber(field, target.set, ghost, unit) ??
+              0)
         if (!Number.isFinite(base)) return
         const next = Math.max(0, Math.round((base + (k === 'plus' ? step : -step)) * 100) / 100)
         putDraft(String(next))
@@ -483,7 +492,8 @@ export default function SessionScreen() {
       }
       case 'plates': {
         const parsed = typed === '' ? null : parseWeight(typed, unit)
-        const weightG = parsed ?? target.set.weightG ?? ghost?.weightG ?? 0
+        const weightG =
+          parsed ?? target.set.weightG ?? target.set.suggestedWeightG ?? ghost?.weightG ?? 0
         router.push({ params: { weightG }, pathname: '/plates' })
         return
       }
@@ -509,7 +519,7 @@ export default function SessionScreen() {
     }
   }
 
-  const handleComplete = (setId: number) => {
+  const handleComplete = (setId: number, pageY: number) => {
     const { draft: typed, ghosts: prevs, pad: at, settings: config, tree: now } = live.current
     if (!now) return
     const target = findSet(now, setId)
@@ -524,17 +534,31 @@ export default function SessionScreen() {
       if (restEndsAt !== null && set.completedAt === restStartedAt) endRest()
       return
     }
-    // Los campos sin tocar se confirman con el ghost; lo tipeado pisa al ghost. Un solo write.
+    // Los campos sin tocar se confirman solos, con la misma precedencia que dibuja la celda: el
+    // peso que sugirió la rutina primero, después lo de la vez anterior. Lo tipeado pisa a los dos.
+    // Un solo write.
     const fill: SetPatch = {}
     const prev = prevs.get(ex.se.id)?.[index] ?? null
-    if (prev) {
-      for (const field of fieldsFor(ex.exercise.metric)) {
-        if (!hasValue(field, set) && hasValue(field, prev))
-          Object.assign(fill, columnPatch(field, prev))
+    const fields = fieldsFor(ex.exercise.metric)
+    for (const field of fields) {
+      if (hasValue(field, set)) continue
+      if (field === 'weight' && set.suggestedWeightG !== null) {
+        fill.weightG = set.suggestedWeightG
+        continue
       }
+      if (prev && hasValue(field, prev)) Object.assign(fill, columnPatch(field, prev))
     }
     if (at?.setId === setId && typed !== '')
       Object.assign(fill, parseDraft(at.field, typed, config.unit))
+    // El objetivo del día es un fantasma y nada más (§2.2: la app sugiere, nunca aplica): una serie
+    // sin repeticiones y sin ghost previo del que heredarlas no se completa con "8–12". Se rebota
+    // con el numpad ya puesto sobre las reps, que es lo único que falta para poder tildarla.
+    if (fields.includes('reps') && (set.reps ?? fill.reps ?? null) === null) {
+      haptic('error')
+      toast.show({ duration: NEED_REPS_TOAST_MS, text: t('session.needReps') })
+      focusOn(setId, 'reps', pageY)
+      return
+    }
     const last = ex.sets.every((s) => s.id === setId || s.completedAt !== null)
     const restSec = ex.exercise.defaultRestSec ?? config.defaultRestSec
     haptic(last ? 'exerciseDone' : 'setComplete')
@@ -877,7 +901,7 @@ type CardProps = {
   focus: Focus | null
   draft: string
   onFocus: (setId: number, field: Field, pageY: number) => void
-  onComplete: (setId: number) => void
+  onComplete: (setId: number, pageY: number) => void
   onSetMenu: (setId: number) => void
   onDeleteSet: (setId: number) => void
   onMenu: (seId: number, key: string) => void
@@ -974,7 +998,7 @@ function ExerciseCard({
               focused={focus?.setId === set.id ? focus.field : null}
               index={index}
               locale={locale}
-              onComplete={() => onComplete(set.id)}
+              onComplete={(pageY) => onComplete(set.id, pageY)}
               onFocus={(f, pageY) => onFocus(set.id, f, pageY)}
               onKindPress={() => onSetMenu(set.id)}
               prev={ghosts[index] ?? null}

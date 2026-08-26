@@ -240,6 +240,10 @@ export const sessionExercise = sqliteTable(
       .references(() => exercise.id),
     orderIndex: integer('order_index').notNull(),
     supersetGroup: integer('superset_group'),
+    // El descanso que pedía la rutina para este ejercicio, copiado al pre-cargar el día (D07). En la
+    // fila y no leído de `routine_exercise`: la rutina se puede editar (o borrar) mientras entrenás y
+    // el descanso no puede cambiar abajo del entrenamiento. `null` = el del ejercicio o el de ajustes.
+    restSec: integer('rest_sec'),
     note: text('note'),
     feedback: text('feedback', { mode: 'json' }).$type<Record<string, number | string>>(),
   },
@@ -260,6 +264,11 @@ export const setEntry = sqliteTable(
     kind: text('kind', { enum: SET_KINDS }).notNull().default('normal'),
     weightG: integer('weight_g'),
     reps: integer('reps'),
+    // Lo que la rutina pedía para esta serie, copiado al pre-cargar el día (D06). Se guarda en la
+    // fila y no se lee de `routine_set`: la rutina se puede editar (o borrar) después, y el
+    // historial tiene que seguir diciendo qué se pedía el día que se entrenó.
+    targetRepsMin: integer('target_reps_min'),
+    targetRepsMax: integer('target_reps_max'),
     durationMs: integer('duration_ms'),
     distanceMm: integer('distance_mm'),
     rpe: real('rpe'),

@@ -13,6 +13,7 @@ import {
   recentExercises,
   searchExercises,
 } from '@/db/queries/exercises'
+import { addRoutineExercise } from '@/db/queries/routines'
 import { addExercise, getSessionExercise, swapExercise } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
@@ -102,8 +103,13 @@ const keyExtractor = (row: Row) => row.key
 const getItemType = (row: Row) => row.kind
 
 export default function PickExerciseScreen() {
-  // Con seId la sheet reemplaza el ejercicio de esa fila; con sessionId lo agrega al final.
-  const { sessionId, seId } = useLocalSearchParams<{ sessionId: string; seId: string }>()
+  // Con seId la sheet reemplaza el ejercicio de esa fila; con sessionId lo agrega al final de la
+  // sesión; con dayId, al final de un día de rutina (la misma hoja, otro destino).
+  const { sessionId, seId, dayId } = useLocalSearchParams<{
+    sessionId: string
+    seId: string
+    dayId: string
+  }>()
   const insets = useSafeAreaInsets()
   const list = useRef<FlashListRef<Row>>(null)
   // En Android la hoja no se achica con el teclado: react-native-screens la expande al detent más
@@ -159,6 +165,7 @@ export default function PickExerciseScreen() {
   const pick = (exerciseId: number) => {
     // Elegir un ejercicio es rutina: sin háptico (§7.4).
     if (seId) swapExercise(Number(seId), exerciseId)
+    else if (dayId) addRoutineExercise(Number(dayId), exerciseId)
     else if (sessionId) addExercise(Number(sessionId), exerciseId)
     router.back()
   }

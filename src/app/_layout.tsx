@@ -132,6 +132,39 @@ function Gate() {
           name="exercise/new"
           options={{ presentation: 'formSheet', sheetAllowedDetents: [1] }}
         />
+        <Stack.Screen
+          name="routine/[id]"
+          options={{ headerShown: true, headerBackTitle: t('common.back'), title: '' }}
+        />
+        <Stack.Screen
+          name="routine/new"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        {/* La misma hoja renombra la rutina (`id`) o el día (`dayId`, con el toggle de deload). */}
+        <Stack.Screen
+          name="routine-edit"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="routine-day/[id]"
+          options={{ headerShown: true, headerBackTitle: t('common.back'), title: '' }}
+        />
+        <Stack.Screen
+          name="routine-set"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
       </Stack>
       <ToastHost />
     </>
