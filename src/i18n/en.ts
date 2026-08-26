@@ -103,6 +103,8 @@ export default {
   'settings.rpeNone': 'None',
   'settings.defaultRest': 'Default rest',
   'settings.seconds': '{n} s',
+  'settings.appLock': 'App lock',
+  'settings.appLockUnavailable': 'This device has no fingerprint or face unlock set up.',
 
   'settings.tools': 'Tools',
   'settings.calculators': 'Calculators',
@@ -303,6 +305,18 @@ export default {
   'rest.remaining': '{time} left',
   'rest.notification.title': 'Rest is over',
   'rest.notification.body': 'Back to your next set.',
+
+  'lock.prompt': 'Unlock Gym Tracker',
+  'lock.locked': 'App locked',
+  'lock.unlock': 'Unlock',
+  'lock.retry': 'Try again',
+
+  'notif.inProgress': 'Workout in progress',
+  'notif.restUntil': 'Rest until {time}',
+  'notif.skip': 'Skip',
+  'notif.plus15': '+15 s',
+
+  'quick.free': 'Free workout',
 
   'intervals.title': 'Intervals',
   'intervals.work': 'Work',

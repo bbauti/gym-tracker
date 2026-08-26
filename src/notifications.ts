@@ -9,12 +9,24 @@
  */
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
-import { t } from '@/i18n'
+import { clearRest, getSession, setRestEndsAt } from '@/db/queries/session'
+import { locale, t } from '@/i18n'
+import { adjustRestEndsAt } from '@/lib/rest'
 
 /** Android ≥ 8 ignora la prioridad de la notificación: manda el canal. */
 const CHANNEL_ID = 'rest'
 /** C11 tiene el suyo: silenciar los avisos de descanso no puede callar también los intervalos. */
 export const INTERVALS_CHANNEL_ID = 'intervals'
+/** L04: la sticky informa, no avisa. LOW = sin sonido ni heads-up, y silenciable aparte. */
+const SESSION_CHANNEL_ID = 'session'
+
+const SESSION_NOTIFICATION_ID = 'session'
+/** Sin `-` ni `:`: expo avisa que con esos caracteres la categoría puede no resolverse. */
+const REST_CATEGORY_ID = 'sessionRest'
+const SKIP_ACTION = 'skip'
+const PLUS15_ACTION = 'plus15'
+
+const timeFormat = new Intl.DateTimeFormat(locale, { timeStyle: 'short' })
 
 /**
  * Id fijo en vez de recordar el que devuelve `schedule`: hay un solo descanso a la vez, y así
@@ -47,6 +59,10 @@ function serial(step: () => Promise<void>): Promise<void> {
  * muestra sin consultar esto. Se llama una vez desde el Gate del layout raíz.
  */
 export function configureNotifications(): void {
+  // Arranque en frío: si mataron la app con un entrenamiento abierto, su sticky quedó posteada y,
+  // por `ongoing`, hasta Android 13 no se puede sacar deslizando. Nunca convive con la app en
+  // pantalla — el AppState la baja al volver, y este es el "volver" que no dispara ningún evento.
+  dismissSessionNotification()
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: false,
@@ -68,6 +84,24 @@ export function configureNotifications(): void {
         name: t('intervals.title'),
         importance: Notifications.AndroidImportance.HIGH,
       }),
+      Notifications.setNotificationChannelAsync(SESSION_CHANNEL_ID, {
+        name: t('notif.inProgress'),
+        importance: Notifications.AndroidImportance.LOW,
+      }),
+      // Los botones de la sticky viven en una categoría, no en el contenido: sin ella la
+      // notificación sale pelada, así que se espera junto con los canales antes de postear.
+      Notifications.setNotificationCategoryAsync(REST_CATEGORY_ID, [
+        {
+          identifier: SKIP_ACTION,
+          buttonTitle: t('notif.skip'),
+          options: { opensAppToForeground: false },
+        },
+        {
+          identifier: PLUS15_ACTION,
+          buttonTitle: t('notif.plus15'),
+          options: { opensAppToForeground: false },
+        },
+      ]),
     ]).catch(() => {})
   }
 }
@@ -153,3 +187,91 @@ export function scheduleRestEnd(endsAt: number): Promise<void> {
 export function cancelRestEnd(): Promise<void> {
   return cancelScheduled(REST_NOTIFICATION_ID)
 }
+
+/**
+ * L04 (Android): con un entrenamiento abierto y la app en background, una sola notificación pegada
+ * con el estado. Id fijo, así que refrescarla es volver a llamar acá. En iOS no se postea nada: sin
+ * Live Activities la sticky sería un banner más en el centro de notificaciones.
+ *
+ * El trigger es de 1 s y no `null` porque con `trigger: null` el nativo no sabe a qué canal mandarla
+ * y cae en el canal fallback de expo (importancia default → suena). Una fecha ya pasada tampoco
+ * sirve: el scheduler descarta lo que no dispara en el futuro.
+ */
+export function showSessionNotification(input: {
+  sessionId: number
+  name: string | null
+  restEndsAt: number | null
+}): Promise<void> {
+  const { sessionId, name, restEndsAt } = input
+  return serial(async () => {
+    if (Platform.OS !== 'android') return
+    await channels
+    if (!(await ensureNotificationPermission())) return
+    const resting = restEndsAt !== null && restEndsAt > Date.now()
+    await Notifications.scheduleNotificationAsync({
+      identifier: SESSION_NOTIFICATION_ID,
+      content: {
+        title: name || t('session.untitled'),
+        body: resting
+          ? t('notif.restUntil', { time: timeFormat.format(restEndsAt) })
+          : t('notif.inProgress'),
+        sound: false,
+        sticky: true,
+        autoDismiss: false,
+        categoryIdentifier: resting ? REST_CATEGORY_ID : undefined,
+        data: { sessionId, endsAt: restEndsAt },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: 1,
+        channelId: SESSION_CHANNEL_ID,
+      },
+    })
+  })
+}
+
+/** Volver a la app, terminar o descartar. También cancela la programada: si volvés antes del
+ *  segundo del trigger, si no aparecería recién después de haberla bajado. */
+export function dismissSessionNotification(): Promise<void> {
+  return serial(async () => {
+    await Notifications.cancelScheduledNotificationAsync(SESSION_NOTIFICATION_ID)
+    await Notifications.dismissNotificationAsync(SESSION_NOTIFICATION_ID)
+  })
+}
+
+/**
+ * Los botones de la sticky. Uno solo para toda la app y a nivel de módulo: en un efecto, cada Fast
+ * Refresh sumaría otro. Con `opensAppToForeground: false` esto corre con la app en background (o con
+ * el proceso recién levantado por el sistema), así que el `try` es en serio: si la base todavía no
+ * migró, tocar el botón no puede tirar la app.
+ *
+ * La sesión y el final del descanso viajan en `data` porque acá no hay pantalla que los conozca.
+ */
+Notifications.addNotificationResponseReceivedListener((response) => {
+  const action = response.actionIdentifier
+  if (action !== SKIP_ACTION && action !== PLUS15_ACTION) return
+  const { title, data } = response.notification.request.content
+  const sessionId = data?.sessionId
+  if (typeof sessionId !== 'number') return
+  try {
+    if (action === SKIP_ACTION) {
+      clearRest(sessionId)
+      cancelRestEnd()
+      showSessionNotification({ sessionId, name: title, restEndsAt: null })
+    } else {
+      // La fila y no el `endsAt` del payload, igual que `adjustRest` en la pantalla: la sticky tarda
+      // ~1 s en re-postearse, así que un doble tap leería dos veces el valor congelado y el segundo
+      // pisaría al primero (+30 s quedan en +15 s). Y el piso de `adjustRestEndsAt` evita lo peor:
+      // sobre un descanso ya vencido, sumar al valor viejo escribiría una fecha pasada, que el
+      // scheduler descarta y deja la sticky sin botones — el botón de estirar terminaba el descanso.
+      const current = getSession(sessionId)?.restEndsAt
+      if (current == null) return
+      const endsAt = adjustRestEndsAt(current, 15_000, Date.now())
+      setRestEndsAt(sessionId, endsAt)
+      scheduleRestEnd(endsAt)
+      showSessionNotification({ sessionId, name: title, restEndsAt: endsAt })
+    }
+  } catch {
+    // Un botón que falla deja el descanso como estaba; nada que mostrar sin app en pantalla.
+  }
+})

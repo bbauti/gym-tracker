@@ -102,6 +102,9 @@ export default {
   'settings.rpeNone': 'Ninguno',
   'settings.defaultRest': 'Descanso por defecto',
   'settings.seconds': '{n} s',
+  'settings.appLock': 'Bloqueo de la app',
+  'settings.appLockUnavailable':
+    'Este dispositivo no tiene huella ni reconocimiento facial configurados.',
 
   'settings.tools': 'Herramientas',
   'settings.calculators': 'Calculadoras',
@@ -302,6 +305,18 @@ export default {
   'rest.remaining': '{time} restantes',
   'rest.notification.title': 'Descanso terminado',
   'rest.notification.body': 'Volvé a la siguiente serie.',
+
+  'lock.prompt': 'Desbloqueá Gym Tracker',
+  'lock.locked': 'App bloqueada',
+  'lock.unlock': 'Desbloquear',
+  'lock.retry': 'Reintentar',
+
+  'notif.inProgress': 'Entrenamiento en curso',
+  'notif.restUntil': 'Descanso hasta las {time}',
+  'notif.skip': 'Saltar',
+  'notif.plus15': '+15 s',
+
+  'quick.free': 'Entrenamiento libre',
 
   'intervals.title': 'Intervalos',
   'intervals.work': 'Trabajo',

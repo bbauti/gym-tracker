@@ -60,7 +60,12 @@ import {
   type Unit,
 } from '@/lib/units'
 import { warmupRamp } from '@/lib/warmup'
-import { cancelRestEnd, scheduleRestEnd } from '@/notifications'
+import {
+  cancelRestEnd,
+  dismissSessionNotification,
+  scheduleRestEnd,
+  showSessionNotification,
+} from '@/notifications'
 import { MAX_CARD_EXERCISES, shareSession } from '@/share'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
@@ -443,13 +448,35 @@ export default function SessionScreen() {
   // arrancó con la app atrás (el diálogo de permisos de Android, una llamada) nunca progresó y el
   // tilde se quedó a medio pintar aunque la serie esté completada. Re-apuntar los shared values al
   // target los deja donde ya estaban cuando la animación sí corrió: no se ve nada.
+  //
+  // L04: la misma transición postea (y al volver baja) la notificación pegada del entrenamiento —
+  // con la app atrás el JS puede quedar suspendido, así que este es el único momento seguro para
+  // escribirla. Lee del ref y no del render a propósito: si el efecto se re-suscribiera al cambiar
+  // `rest_ends_at`, su cleanup bajaría la sticky que el botón +15 s acaba de reponer.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') setResumeKey((k) => k + 1)
-      else flush(live.current)
+      if (state === 'active') {
+        setResumeKey((k) => k + 1)
+        dismissSessionNotification().catch(() => {})
+        return
+      }
+      flush(live.current)
+      // iOS manda 'inactive' al bajar el centro de control: eso no es irse de la app.
+      if (state !== 'background') return
+      const s = live.current.tree?.session
+      if (!s || s.endedAt !== null) return
+      // En pausa el descanso está congelado: sin `restEndsAt` la sticky no ofrece saltar lo que no corre.
+      showSessionNotification({
+        name: s.name,
+        restEndsAt: s.pausedAt === null ? s.restEndsAt : null,
+        sessionId,
+      }).catch(() => {})
     })
-    return () => sub.remove()
-  }, [])
+    return () => {
+      sub.remove()
+      dismissSessionNotification().catch(() => {})
+    }
+  }, [sessionId])
 
   // Y al irse de la pantalla: el back del header y el swipe de iOS desmontan con el draft todavía
   // en React. Terminar es el peor caso — `endSession` barre la serie que quedó sin valores y, si
@@ -870,6 +897,7 @@ export default function SessionScreen() {
           haptic('success')
           endSession(sessionId)
           cancelRestEnd().catch(() => {})
+          dismissSessionNotification().catch(() => {})
           router.back()
         },
       )
@@ -886,6 +914,7 @@ export default function SessionScreen() {
         haptic('delete')
         deleteSession(sessionId)
         cancelRestEnd().catch(() => {})
+        dismissSessionNotification().catch(() => {})
         router.back()
       },
     )

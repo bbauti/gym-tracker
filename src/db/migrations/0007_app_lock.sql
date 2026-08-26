@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `app_lock` integer DEFAULT false NOT NULL;

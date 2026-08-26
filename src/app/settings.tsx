@@ -1,6 +1,6 @@
 import { router } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
-import { Children, type ReactNode, useState } from 'react'
+import { Children, type ReactNode, useEffect, useState } from 'react'
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, View } from 'react-native'
 import {
   BackupError,
@@ -18,6 +18,7 @@ import { getSettings, updateSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
 import { defaultIncrementG } from '@/lib/units'
+import { available, availableSync } from '@/lock'
 import { type HapticEvent, haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import Menu from '@/ui/Menu'
@@ -39,6 +40,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[2],
     paddingBottom: spacing[2],
   },
+  sectionFooter: { paddingHorizontal: spacing[2], paddingTop: spacing[2] },
   group: { borderRadius: radius.md, overflow: 'hidden' },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   lastRow: { marginBottom: -StyleSheet.hairlineWidth },
@@ -89,7 +91,16 @@ function errorMessage(error: unknown): string {
     : t('backup.error.unsupported')
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({
+  title,
+  footer,
+  children,
+}: {
+  title: string
+  /** Aclaración al pie del grupo, como en Ajustes de iOS: explica por qué una fila no responde. */
+  footer?: string
+  children: ReactNode
+}) {
   const last = Children.count(children) - 1
   return (
     <View>
@@ -106,6 +117,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
           <View style={i === last ? styles.lastRow : null}>{child}</View>
         ))}
       </View>
+      {footer ? (
+        <Text color="secondary" role="footnote" style={styles.sectionFooter}>
+          {footer}
+        </Text>
+      ) : null}
     </View>
   )
 }
@@ -168,26 +184,33 @@ function SwitchRow({
   label,
   value,
   onChange,
+  disabled,
+  hint,
 }: {
   label: string
   value: boolean
   onChange: (next: boolean) => void
+  disabled?: boolean
+  /** El motivo de que la fila esté deshabilitada: al pie del grupo se ve, pero no se anuncia. */
+  hint?: string
 }) {
   return (
     <PressableScale
+      accessibilityHint={hint}
       accessibilityLabel={label}
       accessibilityRole="switch"
-      accessibilityState={{ checked: value }}
+      accessibilityState={{ checked: value, disabled: Boolean(disabled) }}
+      disabled={disabled}
       onPress={() => onChange(!value)}
       scale={0.98}
       style={styles.rowBox}
     >
-      <View style={styles.prefRow}>
+      <View style={[styles.prefRow, disabled ? styles.dimmed : null]}>
         <Text numberOfLines={1} style={styles.rowLabel}>
           {label}
         </Text>
         <View pointerEvents="none">
-          <Switch value={value} />
+          <Switch disabled={disabled} value={value} />
         </View>
       </View>
     </PressableScale>
@@ -263,8 +286,20 @@ const restItems = REST_CHOICES.map((n) => ({ key: String(n), label: t('settings.
 export default function SettingsScreen() {
   const [busy, setBusy] = useState<string | null>(null)
   const settings = useQuery(getSettings, ['settings'])
+  // Arranca con lo que ya contestó `available()` (el layout raíz lo pregunta al montar la app): null
+  // solo la primera vez, y ahí la fila arranca deshabilitada y sin la aclaración al pie.
+  const [lockReady, setLockReady] = useState<boolean | null>(availableSync)
   // Los backups son archivos, no filas: ningún change listener los ve, se re-listan a mano.
   const [backups, setBackups] = useState<BackupInfo[]>(listBackups)
+
+  // `available()` mira el hardware Y que haya algo enrolado: si borraron la biometría con el bloqueo
+  // ya puesto, la preferencia queda pidiendo algo que el sistema no puede verificar, y se apaga.
+  useEffect(() => {
+    void available().then((ok) => {
+      setLockReady(ok)
+      if (!ok && getSettings().appLock) updateSettings({ appLock: false })
+    })
+  }, [])
 
   /** `action` devuelve el mensaje del Alert, o null si no hay nada que anunciar. */
   async function run(
@@ -350,7 +385,10 @@ export default function SettingsScreen() {
       style={styles.screen}
     >
       <View style={styles.sections}>
-        <Section title={t('settings.preferences')}>
+        <Section
+          footer={lockReady === false ? t('settings.appLockUnavailable') : undefined}
+          title={t('settings.preferences')}
+        >
           <SwitchRow
             label={t('settings.haptics')}
             onChange={(haptics) => {
@@ -392,6 +430,17 @@ export default function SettingsScreen() {
             label={t('settings.sex')}
             onSelect={(key) => updateSettings({ sex: key === 'unset' ? null : (key as 'm' | 'f') })}
             value={settings.sex ? sexLabel[settings.sex] : t('settings.sexUnset')}
+          />
+          {/* Última de las preferencias: la aclaración del pie del grupo queda pegada a esta fila. */}
+          <SwitchRow
+            disabled={!lockReady}
+            hint={lockReady === false ? t('settings.appLockUnavailable') : undefined}
+            label={t('settings.appLock')}
+            onChange={(appLock) => {
+              haptic('toggle')
+              updateSettings({ appLock })
+            }}
+            value={settings.appLock}
           />
         </Section>
 

@@ -128,6 +128,8 @@ export const settings = sqliteTable(
     activeGymId: integer('active_gym_id').references(() => gym.id, { onDelete: 'set null' }),
     /** Solo lo piden Wilks y DOTS, que tienen coeficientes distintos por sexo (J09). */
     sex: text('sex', { enum: ['m', 'f'] }),
+    /** L10: pedir biometría al volver. Off si el dispositivo no tiene nada enrolado. */
+    appLock: integer('app_lock', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [check('settings_single_row', sql`${t.id} = 1`)],
 )
