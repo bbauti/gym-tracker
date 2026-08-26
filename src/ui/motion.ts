@@ -20,6 +20,7 @@ export const Timing = {
   fast: { duration: 140, easing: Ease.out },
   base: { duration: 200, easing: Ease.out },
   move: { duration: 260, easing: Ease.inOut },
+  toast: { duration: 400, easing: Ease.out }, // entra el toast; sale con `base` (0.5 ×)
   sheet: { duration: 500, easing: Ease.sheet },
 }
 

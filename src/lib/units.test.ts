@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  defaultIncrementG,
   formatDistance,
   formatDuration,
   formatWeight,
@@ -36,6 +37,21 @@ test('formatWeight is locale aware and trims trailing zeros', () => {
   expect(formatWeight(82000, 'kg', 'en')).toBe('82 kg')
   expect(formatWeight(82500, 'kg', 'es', { withUnit: false })).toBe('82,5')
   expect(formatWeight(unitToG(135, 'lb'), 'lb', 'en')).toBe('135 lb')
+})
+
+test('formatWeight rounds volumes to whole units with maxFractionDigits 0', () => {
+  const volumeG = 217_728 // 480 lb exactos, redondeados a gramos al guardarse
+  expect(formatWeight(volumeG, 'lb', 'en')).toBe('480.01 lb')
+  expect(formatWeight(volumeG, 'lb', 'en', { maxFractionDigits: 0 })).toBe('480 lb')
+  expect(formatWeight(volumeG, 'kg', 'en')).toBe('217.73 kg')
+  expect(formatWeight(volumeG, 'kg', 'en', { maxFractionDigits: 0 })).toBe('218 kg')
+})
+
+test('defaultIncrementG is a round step in the display unit', () => {
+  expect(defaultIncrementG('kg')).toBe(2500)
+  expect(defaultIncrementG('lb')).toBe(unitToG(5, 'lb'))
+  expect(formatWeight(defaultIncrementG('kg'), 'kg', 'en', { withUnit: false })).toBe('2.5')
+  expect(formatWeight(defaultIncrementG('lb'), 'lb', 'en', { withUnit: false })).toBe('5')
 })
 
 test('parseWeight accepts both decimal separators and rejects garbage', () => {

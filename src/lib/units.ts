@@ -30,9 +30,9 @@ export function formatWeight(
   g: number,
   unit: Unit,
   locale: 'es' | 'en',
-  opts?: { withUnit?: boolean },
+  opts?: { withUnit?: boolean; maxFractionDigits?: number },
 ): string {
-  const n = nf(locale, 2).format(gToUnit(g, unit))
+  const n = nf(locale, opts?.maxFractionDigits ?? 2).format(gToUnit(g, unit))
   return opts?.withUnit === false ? n : `${n} ${unit}`
 }
 
@@ -42,6 +42,16 @@ export function parseWeight(text: string, unit: Unit): number | null {
   const value = Number(cleaned)
   if (!Number.isFinite(value)) return null
   return unitToG(value, unit)
+}
+
+/**
+ * Paso de −/+ cuando el ejercicio no trae override: 2,5 kg o 5 lb (2268 g).
+ * ponytail: dos números fijos. El default global de `settings` es una columna en gramos pensada en
+ * kg, así que en lb daba "5,51". Techo: el paso global no se puede configurar. Upgrade: guardarlo
+ * por unidad en settings.
+ */
+export function defaultIncrementG(unit: Unit): number {
+  return unit === 'kg' ? 2500 : 2268
 }
 
 export function roundToIncrement(g: number, incG: number): number {

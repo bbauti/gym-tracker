@@ -26,6 +26,10 @@ export const colors = {
   tint: color('systemBlue', null, '#0A84FF'),
   fill: color('systemFill', null, 'rgba(120,120,128,0.2)'),
   destructive: color('systemRed', null, '#FF3B30'),
+  // Blanco fijo a propósito: es el color de lo que va ENCIMA de `tint` o `destructive`
+  // (el check de una serie, la tecla de acento, el tacho del swipe), y esos dos son
+  // suficientemente oscuros en light y en dark como para no necesitar variante.
+  onTint: '#FFFFFF',
 } satisfies Record<string, ColorValue>
 
 export const spacing = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 24, 6: 32 } as const

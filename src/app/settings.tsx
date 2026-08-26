@@ -1,5 +1,6 @@
+import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { Children, type ReactNode, useState } from 'react'
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, View } from 'react-native'
 import {
   BackupError,
   type BackupInfo,
@@ -12,9 +13,12 @@ import {
   restoreFromFile,
   wipeAll,
 } from '@/db/backup'
+import { getSettings, updateSettings } from '@/db/queries/settings'
+import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
 import { type HapticEvent, haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
+import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
@@ -36,7 +40,7 @@ const styles = StyleSheet.create({
   group: { borderRadius: radius.md, overflow: 'hidden' },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   lastRow: { marginBottom: -StyleSheet.hairlineWidth },
-  dangerBox: { paddingLeft: spacing[4], backgroundColor: colors.secondaryGroupedBackground },
+  rowBox: { paddingLeft: spacing[4], backgroundColor: colors.secondaryGroupedBackground },
   dangerRow: {
     minHeight: MIN_TARGET,
     flexDirection: 'row',
@@ -45,7 +49,18 @@ const styles = StyleSheet.create({
     paddingRight: spacing[4],
     paddingVertical: spacing[2],
   },
-  dangerLabel: { flex: 1 },
+  // Igual que la fila de ListRow: el separador lo dibuja cada fila y `lastRow` tapa el último.
+  prefRow: {
+    minHeight: MIN_TARGET,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingRight: spacing[4],
+    paddingVertical: spacing[2],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+  },
+  rowLabel: { flex: 1 },
 })
 
 // ponytail: unidades abreviadas (min/h/d) — no se flexionan ni en es ni en en, así que no hace falta
@@ -93,6 +108,90 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+/**
+ * ListRow no sirve para estas dos: sin `onPress` se anuncia deshabilitada, y con `onPress` se come
+ * el tap que el menú nativo necesita para abrirse. Misma caja, contenido a mano.
+ * ponytail: tercera copia de esta fila (las otras dos están en `exercise/[id]` y `exercise/new`),
+ * pero cada grupo pinta sus separadores distinto. Techo: un cambio de estilo se hace tres veces.
+ * Upgrade: `ui/PickerRow.tsx` cuando los tres grupos usen la misma estrategia de separador.
+ */
+function PickerRow({
+  label,
+  value,
+  items,
+  onSelect,
+}: {
+  label: string
+  value: string
+  items: { key: string; label: string }[]
+  onSelect: (key: string) => void
+}) {
+  return (
+    <Menu items={items} onSelect={onSelect}>
+      <View
+        accessible
+        accessibilityLabel={label}
+        accessibilityRole="button"
+        accessibilityValue={{ text: value }}
+        style={styles.rowBox}
+      >
+        <View style={styles.prefRow}>
+          <Text numberOfLines={1} style={styles.rowLabel}>
+            {label}
+          </Text>
+          <Text color="secondary" numberOfLines={1}>
+            {value}
+          </Text>
+          <SymbolView
+            fallback={
+              <Text color="tertiary" role="footnote">
+                ⌄
+              </Text>
+            }
+            name={{
+              ios: 'chevron.up.chevron.down' as SFSymbol,
+              android: 'unfold_more' as AndroidSymbol,
+            }}
+            size={12}
+            tintColor={colors.tertiaryLabel}
+          />
+        </View>
+      </View>
+    </Menu>
+  )
+}
+
+/** El Switch mide 51×31: el área tocable es la fila entera, y el switch va sin eventos propios. */
+function SwitchRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: boolean
+  onChange: (next: boolean) => void
+}) {
+  return (
+    <PressableScale
+      accessibilityLabel={label}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      onPress={() => onChange(!value)}
+      scale={0.98}
+      style={styles.rowBox}
+    >
+      <View style={styles.prefRow}>
+        <Text numberOfLines={1} style={styles.rowLabel}>
+          {label}
+        </Text>
+        <View pointerEvents="none">
+          <Switch value={value} />
+        </View>
+      </View>
+    </PressableScale>
+  )
+}
+
 /** ListRow no tiene variante destructiva y `ui/` es de otro slice: misma caja, label en rojo. */
 function DangerRow({
   title,
@@ -105,7 +204,7 @@ function DangerRow({
 }) {
   const content = (
     <View style={styles.dangerRow}>
-      <Text color="destructive" numberOfLines={1} style={styles.dangerLabel}>
+      <Text color="destructive" numberOfLines={1} style={styles.rowLabel}>
         {title}
       </Text>
       {trailing}
@@ -113,17 +212,12 @@ function DangerRow({
   )
   if (!onPress)
     return (
-      <View accessible accessibilityLabel={title} style={styles.dangerBox}>
+      <View accessible accessibilityLabel={title} style={styles.rowBox}>
         {content}
       </View>
     )
   return (
-    <PressableScale
-      accessibilityLabel={title}
-      onPress={onPress}
-      scale={0.98}
-      style={styles.dangerBox}
-    >
+    <PressableScale accessibilityLabel={title} onPress={onPress} scale={0.98} style={styles.rowBox}>
       {content}
     </PressableScale>
   )
@@ -139,8 +233,22 @@ function confirmRestore(onConfirm: () => void) {
 
 type AlertMsg = { title: string; body?: string }
 
+const unitItems = [
+  { key: 'kg', label: t('session.kg') },
+  { key: 'lb', label: t('session.lb') },
+]
+
+const rpeItems = [
+  { key: 'rpe', label: t('session.rpe') },
+  { key: 'rir', label: t('session.rir') },
+  { key: 'none', label: t('settings.rpeNone') },
+]
+
+const rpeLabel = { rpe: t('session.rpe'), rir: t('session.rir'), none: t('settings.rpeNone') }
+
 export default function SettingsScreen() {
   const [busy, setBusy] = useState<string | null>(null)
+  const settings = useQuery(getSettings, ['settings'])
   // Los backups son archivos, no filas: ningún change listener los ve, se re-listan a mano.
   const [backups, setBackups] = useState<BackupInfo[]>(listBackups)
 
@@ -228,6 +336,30 @@ export default function SettingsScreen() {
       style={styles.screen}
     >
       <View style={styles.sections}>
+        <Section title={t('settings.preferences')}>
+          <SwitchRow
+            label={t('settings.haptics')}
+            onChange={(haptics) => {
+              // Antes de escribir: apagarlos deja un último tic de confirmación (§7.4).
+              haptic('toggle')
+              updateSettings({ haptics })
+            }}
+            value={settings.haptics}
+          />
+          <PickerRow
+            items={unitItems}
+            label={t('settings.unit')}
+            onSelect={(key) => updateSettings({ unit: key as 'kg' | 'lb' })}
+            value={t(settings.unit === 'kg' ? 'session.kg' : 'session.lb')}
+          />
+          <PickerRow
+            items={rpeItems}
+            label={t('settings.rpeMode')}
+            onSelect={(key) => updateSettings({ rpeMode: key as 'rpe' | 'rir' | 'none' })}
+            value={rpeLabel[settings.rpeMode]}
+          />
+        </Section>
+
         {/* Exportar abre la hoja de compartir: esa hoja ES el feedback. shareAsync también resuelve
             cuando la cancelan, así que un Alert de éxito acá mentiría la mitad de las veces. */}
         <Section title={t('settings.export')}>

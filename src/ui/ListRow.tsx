@@ -11,6 +11,8 @@ type Props = {
   trailing?: ReactNode
   onPress?: () => void
   chevron?: boolean
+  /** La fila es un solo elemento accesible: sin esto, lo que va en `trailing` no se anuncia. */
+  label?: string
 }
 
 const styles = StyleSheet.create({
@@ -28,8 +30,8 @@ const styles = StyleSheet.create({
   labels: { flex: 1 },
 })
 
-export default function ListRow({ title, subtitle, trailing, onPress, chevron }: Props) {
-  const label = subtitle ? `${title}, ${subtitle}` : title
+export default function ListRow({ title, subtitle, trailing, onPress, chevron, label }: Props) {
+  const a11yLabel = label ?? (subtitle ? `${title}, ${subtitle}` : title)
   const content = (
     <View style={styles.row}>
       <View style={styles.labels}>
@@ -60,7 +62,7 @@ export default function ListRow({ title, subtitle, trailing, onPress, chevron }:
     return (
       <View
         accessible
-        accessibilityLabel={label}
+        accessibilityLabel={a11yLabel}
         accessibilityState={{ disabled: true }}
         style={styles.container}
       >
@@ -69,7 +71,7 @@ export default function ListRow({ title, subtitle, trailing, onPress, chevron }:
     )
   return (
     <PressableScale
-      accessibilityLabel={label}
+      accessibilityLabel={a11yLabel}
       onPress={onPress}
       scale={0.98}
       style={styles.container}

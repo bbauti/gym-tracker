@@ -10,6 +10,7 @@ import * as SplashScreen from 'expo-splash-screen'
 import { Suspense, use, useEffect } from 'react'
 import { StyleSheet, useColorScheme, View } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { KeyboardProvider } from 'react-native-keyboard-controller'
 import { startAutoBackup } from '@/db/backup'
 import { ready } from '@/db/client'
 import { getSettings } from '@/db/queries/settings'
@@ -19,6 +20,7 @@ import Button from '@/ui/Button'
 import { setHapticsEnabled } from '@/ui/haptics'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
+import { ToastHost } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/tokens'
 
 SplashScreen.preventAutoHideAsync().catch(() => {})
@@ -68,19 +70,66 @@ function Gate() {
   // Backup rotativo al mandar la app a background (devuelve la baja de la suscripción).
   useEffect(() => startAutoBackup(), [])
 
-  // Los formSheet (pick-exercise, plates, session-edit) se registran acá en la Fase 2.
+  // Un solo Stack raíz: los formSheet son rutas, nunca un <Modal> de RN (§7.5). El título de la
+  // sesión lo pone la pantalla con su propio <Stack.Screen>, porque depende de la fila.
+  // El ToastHost va después del Stack (se dibuja encima) y una sola vez en toda la app: es una vista
+  // absoluta con pointerEvents="box-none", así que no le roba taps a nada.
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen
-        name="settings"
-        options={{
-          presentation: 'modal',
-          headerShown: true,
-          title: t('settings.title'),
-          headerRight: () => <DoneButton />,
-        }}
-      />
-    </Stack>
+    <>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen
+          name="settings"
+          options={{
+            presentation: 'modal',
+            headerShown: true,
+            title: t('settings.title'),
+            headerRight: () => <DoneButton />,
+          }}
+        />
+        <Stack.Screen
+          name="session/[id]"
+          options={{ headerShown: true, headerBackTitle: t('common.back'), title: '' }}
+        />
+        <Stack.Screen
+          name="session-edit"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="note"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="pick-exercise"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: [0.5, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="plates"
+          options={{
+            presentation: 'formSheet',
+            sheetAllowedDetents: 'fitToContents',
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen name="exercise/[id]" options={{ headerShown: true, title: '' }} />
+        <Stack.Screen
+          name="exercise/new"
+          options={{ presentation: 'formSheet', sheetAllowedDetents: [1] }}
+        />
+      </Stack>
+      <ToastHost />
+    </>
   )
 }
 
@@ -107,11 +156,16 @@ export default function RootLayout() {
   const scheme = useColorScheme()
   return (
     <GestureHandlerRootView style={styles.root}>
-      <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Suspense fallback={null}>
-          <Gate />
-        </Suspense>
-      </ThemeProvider>
+      {/* Adentro del GestureHandlerRootView y arriba de todo: KeyboardProvider monta su vista nativa
+          con flex: 1, así que en una hoja `fitToContents` mediría cero. Sin él, las
+          KeyboardAvoidingView de las hojas (nota, editar sesión, elegir ejercicio) son un View. */}
+      <KeyboardProvider>
+        <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Suspense fallback={null}>
+            <Gate />
+          </Suspense>
+        </ThemeProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   )
 }

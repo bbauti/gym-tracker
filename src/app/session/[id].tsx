@@ -1,0 +1,810 @@
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
+import { router, Stack, useLocalSearchParams } from 'expo-router'
+import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
+import { useEffect, useRef, useState } from 'react'
+import { Alert, AppState, Dimensions, StyleSheet, View } from 'react-native'
+import Animated, {
+  FadeIn,
+  useAnimatedRef,
+  useAnimatedStyle,
+  useScrollViewOffset,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated'
+import { exerciseName } from '@/db/queries/exercises'
+import {
+  deleteSession,
+  endSession,
+  getSessionTree,
+  type SetRow as Row,
+  removeSessionExercise,
+  reorderExercises,
+  restoreSessionExercise,
+  type SessionTree,
+} from '@/db/queries/session'
+import {
+  addSet,
+  completeSet,
+  deleteSet,
+  prevSets,
+  restoreSet,
+  type SetPatch,
+  uncompleteSet,
+  updateSet,
+} from '@/db/queries/sets'
+import { getSettings, type Settings } from '@/db/queries/settings'
+import { SET_KINDS, type SetKind } from '@/db/schema'
+import { type Field, type Focus, fieldsFor, type NumKey } from '@/db/types'
+import { useQuery } from '@/db/useQuery'
+import { locale, t } from '@/i18n'
+import { defaultIncrementG, formatWeight, gToUnit, parseWeight, type Unit } from '@/lib/units'
+import Button from '@/ui/Button'
+import Card from '@/ui/Card'
+import EmptyState from '@/ui/EmptyState'
+import { haptic } from '@/ui/haptics'
+import Menu, { type MenuItem, showMenu } from '@/ui/Menu'
+import { RowLayout, Spring } from '@/ui/motion'
+import NumPad from '@/ui/NumPad'
+import PressableScale from '@/ui/PressableScale'
+import SetRow, { fieldLabel, fieldNumber, hasValue, SET_COLUMNS } from '@/ui/SetRow'
+import Sortable from '@/ui/Sortable'
+import SwipeRow from '@/ui/SwipeRow'
+import Text from '@/ui/Text'
+import { toast } from '@/ui/Toast'
+import { colors, MIN_TARGET, spacing } from '@/ui/tokens'
+
+const SESSION_TABLES = ['session', 'session_exercise', 'set_entry', 'exercise']
+const SETTINGS_TABLES = ['settings']
+/** Los ghosts son de sesiones anteriores: no cambian mientras entrenás. */
+const NO_TABLES: string[] = []
+const KEEP_AWAKE_TAG = 'gym-session'
+const MAX_DRAFT = 6
+/** Alto con el que arranca el numpad hasta que mide: cualquier valor que lo deje fuera de pantalla. */
+const PAD_GUESS = 400
+// Portrait-only (app.json): el alto de ventana a nivel módulo no se queda viejo.
+const SCREEN_H = Dimensions.get('window').height
+/** Lo que tiene que quedar libre bajo el dedo al enfocar: la fila entera (56) y un respiro. */
+const ROW_CLEARANCE = 56 + spacing[4]
+
+const EXERCISE_MENU: MenuItem[] = [
+  { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
+  {
+    key: 'swap',
+    label: t('session.exerciseMenu.swap'),
+    md: 'swap_horiz',
+    sf: 'arrow.2.squarepath',
+  },
+  {
+    destructive: true,
+    key: 'remove',
+    label: t('session.exerciseMenu.remove'),
+    md: 'delete',
+    sf: 'trash',
+  },
+]
+
+// El orden importa: en Android el menú se corta a las dos primeras acciones (ver ui/Menu.tsx).
+// "Borrar" cierra el menú y es, además, la única forma accesible de borrar una serie: el swipe vive
+// en un contenedor que VoiceOver no enfoca porque adentro hay celdas enfocables.
+const SET_MENU: MenuItem[] = [
+  ...SET_KINDS.map((k) => ({ key: `kind:${k}`, label: t(`setKind.${k}`) })),
+  { key: 'note', label: t('session.set.menu.note'), md: 'edit_note', sf: 'square.and.pencil' },
+  ...(['none', 'left', 'right'] as const).map((s) => ({
+    key: `side:${s}`,
+    label: `${t('session.set.menu.side')}: ${t(`session.set.side.${s}`)}`,
+  })),
+  { destructive: true, key: 'delete', label: t('common.delete'), md: 'delete', sf: 'trash' },
+]
+
+const styles = StyleSheet.create({
+  screen: { backgroundColor: colors.groupedBackground, flex: 1 },
+  // Sin `gap`: la separación entre cards vive adentro de `cardSlot` porque el hueco de la card
+  // levantada tiene que viajar con ella (ver ui/Sortable.tsx).
+  content: { padding: spacing[4] },
+  cardSlot: { paddingBottom: spacing[4] },
+  empty: { marginBottom: spacing[4], minHeight: 240 },
+  card: { gap: spacing[2] },
+  cardHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
+  cardTitle: { flex: 1 },
+  more: {
+    alignItems: 'center',
+    minHeight: MIN_TARGET,
+    justifyContent: 'center',
+    width: MIN_TARGET,
+  },
+  columns: { alignItems: 'center', flexDirection: 'row', gap: spacing[1] },
+  colBadge: { textAlign: 'center', width: SET_COLUMNS.badge },
+  colPrev: { flex: SET_COLUMNS.prevFlex, textAlign: 'center' },
+  colField: { flex: SET_COLUMNS.cellFlex, textAlign: 'center' },
+  colCheck: { width: SET_COLUMNS.check },
+  addSet: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
+  note: { paddingBottom: spacing[1] },
+  pad: { bottom: 0, left: 0, position: 'absolute', right: 0 },
+})
+
+/** El texto tipeado a columna. `null` = no se puede escribir eso (y no se escribe nada). */
+function parseDraft(field: Field, text: string, unit: Unit): SetPatch | null {
+  if (text === '') return null
+  const n = Number(text.replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0) return null
+  switch (field) {
+    case 'weight': {
+      const g = parseWeight(text, unit)
+      return g === null ? null : { weightG: g }
+    }
+    case 'reps':
+      return { reps: Math.round(n) }
+    // ponytail: la duración se tipea en segundos (90 -> 1:30 al confirmar), no en mm:ss.
+    // Techo: escribir 3 minutos son tres teclas raras (180). Upgrade: modo mm:ss en el numpad.
+    case 'duration':
+      return { durationMs: Math.round(n) * 1000 }
+    case 'distance':
+      return { distanceMm: Math.round(n * 1000) }
+    case 'rpe':
+      return { rpe: Math.min(10, Math.max(1, n)) }
+    case 'rir':
+      return { rir: Math.round(n) }
+  }
+}
+
+/** Copia el valor de una columna tal cual (los ghosts se confirman sin pasar por texto). */
+function columnPatch(field: Field, from: Row): SetPatch {
+  switch (field) {
+    case 'weight':
+      return { weightG: from.weightG }
+    case 'reps':
+      return { reps: from.reps }
+    case 'duration':
+      return { durationMs: from.durationMs }
+    case 'distance':
+      return { distanceMm: from.distanceMm }
+    case 'rpe':
+      return { rpe: from.rpe }
+    case 'rir':
+      return { rir: from.rir }
+  }
+}
+
+type Found = { ex: SessionTree['exercises'][number]; set: Row; index: number }
+
+function findSet(tree: SessionTree, setId: number): Found | null {
+  for (const ex of tree.exercises) {
+    const index = ex.sets.findIndex((s) => s.id === setId)
+    if (index >= 0) return { ex, index, set: ex.sets[index] }
+  }
+  return null
+}
+
+/** El paso de −/+ del campo. `null` = ese campo no tiene stepper (duración, distancia). */
+function stepOf(field: Field, incrementG: number, unit: Unit): number | null {
+  if (field === 'duration' || field === 'distance') return null
+  if (field !== 'weight') return 1
+  // El incremento se guarda en gramos: en lb el default ya viene en 2268 g, así que da 5 redondo.
+  return Math.round(gToUnit(incrementG, unit) * 100) / 100
+}
+
+/** Cadena "siguiente": los campos del ejercicio y después la primera columna de la serie de abajo. */
+function nextFocusOf(tree: SessionTree, pad: Focus | null): Focus | null {
+  if (!pad) return null
+  const found = findSet(tree, pad.setId)
+  if (!found) return null
+  const chain = fieldsFor(found.ex.exercise.metric)
+  const i = chain.indexOf(pad.field)
+  if (i >= 0 && i + 1 < chain.length) return { field: chain[i + 1], setId: pad.setId }
+  const next = found.ex.sets[found.index + 1]
+  return next ? { field: chain[0], setId: next.id } : null
+}
+
+/** Escribe lo que estaba tipeado. Vive afuera del componente porque lo llaman los effects, que
+    tienen que quedarse con una identidad estable (el ref es lo único que no se les queda viejo). */
+function flush(live: Live) {
+  const { draft, pad, settings } = live
+  if (!pad || draft === '') return
+  const patch = parseDraft(pad.field, draft, settings.unit)
+  if (patch) updateSet(pad.setId, patch)
+}
+
+/** Lo que los handlers leen por ref en vez de capturar del render (ver el comentario en la pantalla). */
+type Live = {
+  draft: string
+  ghosts: Map<number, Row[]>
+  open: boolean
+  pad: Focus | null
+  padHeight: number
+  settings: Settings
+  tree: SessionTree | null
+}
+
+function confirm(
+  title: string,
+  body: string,
+  action: string,
+  destructive: boolean,
+  run: () => void,
+) {
+  Alert.alert(title, body, [
+    { style: 'cancel', text: t('common.cancel') },
+    { onPress: run, style: destructive ? 'destructive' : 'default', text: action },
+  ])
+}
+
+export default function SessionScreen() {
+  const params = useLocalSearchParams<{ id: string }>()
+  const sessionId = Number(params.id)
+  const tree = useQuery(
+    () => (Number.isFinite(sessionId) ? getSessionTree(sessionId) : null),
+    SESSION_TABLES,
+    [sessionId],
+  )
+  const settings = useQuery(getSettings, SETTINGS_TABLES)
+
+  // `pad` es el último campo enfocado y sobrevive al blur: el numpad sigue mostrando sus teclas
+  // mientras baja. `open` es lo que decide si está arriba.
+  const [pad, setPad] = useState<Focus | null>(null)
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [padHeight, setPadHeight] = useState(0)
+  const shown = useSharedValue(0)
+  // El sortable necesita el ref del scroll para auto-scrollear al arrastrar contra un borde.
+  const scrollRef = useAnimatedRef<Animated.ScrollView>()
+  const offset = useScrollViewOffset(scrollRef)
+
+  // Un solo read por lista de ejercicios: el numpad (±, plates) y completar necesitan los ghosts,
+  // y un useQuery por card no se puede leer desde acá. La clave encierra todo lo que `run` usa.
+  const exercises = tree?.exercises
+  const ghostKey = (exercises ?? []).map((e) => `${e.se.id}:${e.exercise.id}`).join(',')
+  const ghosts = useQuery(
+    () => new Map((exercises ?? []).map((e) => [e.se.id, prevSets(e.exercise.id, sessionId)])),
+    NO_TABLES,
+    [ghostKey, sessionId],
+  )
+
+  // Todo lo que cambia mientras tipeás vive también en este ref: los handlers lo leen en vez de
+  // capturar el estado, así conservan identidad entre teclas y el compilador puede devolver el
+  // árbol cacheado de las cards que no cambiaron (§5.4: una tecla re-renderiza card + fila +
+  // numpad). Se escribe en los `put*` y se sincroniza después de cada commit; escribirlo EN RENDER
+  // haría que el React Compiler no compile la pantalla y no quedaría nada memoizado.
+  const live = useRef<Live>({ draft, ghosts, open, pad, padHeight, settings, tree })
+  useEffect(() => {
+    live.current = { draft, ghosts, open, pad, padHeight, settings, tree }
+  })
+
+  const active = tree !== null && tree.session.endedAt === null
+  useEffect(() => {
+    if (!active) return
+    activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {})
+    return () => {
+      deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {})
+    }
+  }, [active])
+
+  useEffect(() => {
+    shown.set(withSpring(open ? 1 : 0, Spring.sheet))
+  }, [open, shown])
+
+  // Confirmar lo tipeado al irse la app a background: sin esto un swipe hacia arriba pierde el draft.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') flush(live.current)
+    })
+    return () => sub.remove()
+  }, [])
+
+  // Y al irse de la pantalla: el back del header y el swipe de iOS desmontan con el draft todavía
+  // en React. Terminar es el peor caso — `endSession` barre la serie que quedó sin valores y, si
+  // era la única del ejercicio, se lleva el ejercicio entero.
+  useEffect(() => () => flush(live.current), [])
+
+  const padStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: (1 - shown.get()) * (padHeight > 0 ? padHeight : PAD_GUESS) }],
+  }))
+
+  if (!tree) return null
+
+  const row = tree.session
+  const found = pad ? findSet(tree, pad.setId) : null
+  const padIncrementG = found?.ex.exercise.defaultIncrementG ?? defaultIncrementG(settings.unit)
+  const padStep = pad ? stepOf(pad.field, padIncrementG, settings.unit) : null
+  // El peso se etiqueta desde los gramos (así "5 lb" no vuelve como 5,0000844), el resto es entero.
+  const padLabel =
+    padStep === null
+      ? null
+      : pad?.field === 'weight'
+        ? formatWeight(padIncrementG, settings.unit, locale, { withUnit: false })
+        : String(padStep)
+
+  // Estado y ref se escriben juntos: el ref para el handler que viene, el estado para el render.
+  const putDraft = (typed: string) => {
+    live.current.draft = typed
+    setDraft(typed)
+  }
+  const putPad = (next: Focus) => {
+    live.current.pad = next
+    setPad(next)
+  }
+  const putOpen = (value: boolean) => {
+    live.current.open = value
+    setOpen(value)
+  }
+
+  const commit = () => {
+    flush(live.current)
+    putDraft('')
+  }
+
+  // El numpad tapa el tercio de abajo: si la celda que tocaste cae ahí, se sube el scroll lo justo.
+  // `pageY` es dónde cayó el dedo (lo reenvía SetRow); sin eso habría que medir cada fila.
+  const scrollIntoView = (pageY: number) => {
+    const overlap = pageY + ROW_CLEARANCE - (SCREEN_H - (live.current.padHeight || PAD_GUESS))
+    if (overlap > 0) scrollRef.current?.scrollTo({ animated: true, y: offset.get() + overlap })
+  }
+
+  const focusOn = (setId: number, field: Field, pageY: number) => {
+    commit()
+    putPad({ field, setId })
+    putOpen(true)
+    putDraft('')
+    scrollIntoView(pageY)
+  }
+
+  const blur = () => {
+    commit()
+    putOpen(false)
+  }
+
+  const handleKey = (k: NumKey) => {
+    const { draft: typed, ghosts: prevs, pad: at, settings: config, tree: now } = live.current
+    if (!at || !now) return
+    const target = findSet(now, at.setId)
+    // La serie enfocada desapareció (la borró un swipe): el numpad se baja en vez de quedar inerte.
+    if (!target) {
+      putDraft('')
+      putOpen(false)
+      return
+    }
+    const ghost = prevs.get(target.ex.se.id)?.[target.index] ?? null
+    const unit = config.unit
+    const field = at.field
+    switch (k) {
+      case 'backspace': {
+        if (typed !== '') {
+          putDraft(typed.slice(0, -1))
+          return
+        }
+        const n = fieldNumber(field, target.set, unit) ?? fieldNumber(field, ghost, unit)
+        putDraft(n === null ? '' : String(n).slice(0, -1))
+        return
+      }
+      case 'minus':
+      case 'plus': {
+        const step = stepOf(
+          field,
+          target.ex.exercise.defaultIncrementG ?? defaultIncrementG(unit),
+          unit,
+        )
+        if (step === null) return
+        const base =
+          typed !== ''
+            ? Number(typed.replace(',', '.'))
+            : (fieldNumber(field, target.set, unit) ?? fieldNumber(field, ghost, unit) ?? 0)
+        if (!Number.isFinite(base)) return
+        const next = Math.max(0, Math.round((base + (k === 'plus' ? step : -step)) * 100) / 100)
+        putDraft(String(next))
+        return
+      }
+      case 'plates': {
+        const parsed = typed === '' ? null : parseWeight(typed, unit)
+        const weightG = parsed ?? target.set.weightG ?? ghost?.weightG ?? 0
+        router.push({ params: { weightG }, pathname: '/plates' })
+        return
+      }
+      case 'next': {
+        commit()
+        const next = nextFocusOf(now, at)
+        if (next) putPad(next)
+        else putOpen(false)
+        return
+      }
+      case 'done':
+        blur()
+        return
+      case '.': {
+        if (typed.includes('.') || typed.length >= MAX_DRAFT) return
+        putDraft(typed === '' ? '0.' : `${typed}.`)
+        return
+      }
+      default: {
+        if (typed.length >= MAX_DRAFT) return
+        putDraft(typed === '0' ? k : `${typed}${k}`)
+      }
+    }
+  }
+
+  const handleComplete = (setId: number) => {
+    const { draft: typed, ghosts: prevs, pad: at, settings: config, tree: now } = live.current
+    if (!now) return
+    const target = findSet(now, setId)
+    if (!target) return
+    const { ex, set, index } = target
+    if (set.completedAt !== null) {
+      haptic('setUncomplete')
+      uncompleteSet(setId)
+      return
+    }
+    // Los campos sin tocar se confirman con el ghost; lo tipeado pisa al ghost. Un solo write.
+    const fill: SetPatch = {}
+    const prev = prevs.get(ex.se.id)?.[index] ?? null
+    if (prev) {
+      for (const field of fieldsFor(ex.exercise.metric)) {
+        if (!hasValue(field, set) && hasValue(field, prev))
+          Object.assign(fill, columnPatch(field, prev))
+      }
+    }
+    if (at?.setId === setId && typed !== '')
+      Object.assign(fill, parseDraft(at.field, typed, config.unit))
+    const last = ex.sets.every((s) => s.id === setId || s.completedAt !== null)
+    haptic(last ? 'exerciseDone' : 'setComplete')
+    completeSet(setId, sessionId, fill, ex.exercise.defaultRestSec ?? config.defaultRestSec)
+    if (at?.setId === setId) {
+      putDraft('')
+      putOpen(false)
+    }
+  }
+
+  // Sin diálogo (§7.5): se borra y queda el toast de deshacer. El háptico va antes del write,
+  // en el mismo bloque, porque el write re-renderiza la lista de una. Borrar baja el numpad
+  // (confirmando lo tipeado): el toast vive abajo de todo y si no lo taparía.
+  const handleDeleteSet = (setId: number) => {
+    if (live.current.open) blur()
+    haptic('delete')
+    const deleted = deleteSet(setId)
+    toast.show({
+      actionLabel: t('common.undo'),
+      onAction: () => {
+        haptic('undo')
+        restoreSet(deleted)
+      },
+      text: t('session.setDeleted'),
+    })
+  }
+
+  const handleSetMenu = (setId: number) => {
+    const now = live.current.tree
+    const target = now ? findSet(now, setId) : null
+    if (!target) return
+    showMenu({
+      items: SET_MENU,
+      onSelect: (key) => {
+        if (key === 'note') {
+          router.push({ params: { setId }, pathname: '/note' })
+          return
+        }
+        if (key === 'delete') {
+          handleDeleteSet(setId)
+          return
+        }
+        const [group, value] = key.split(':')
+        if (group === 'kind') updateSet(setId, { kind: value as SetKind })
+        else updateSet(setId, { side: value === 'none' ? null : (value as 'left' | 'right') })
+      },
+      title: exerciseName(target.ex.exercise, locale),
+    })
+  }
+
+  const handleExerciseMenu = (seId: number, key: string) => {
+    if (key === 'note') {
+      router.push({ params: { seId }, pathname: '/note' })
+      return
+    }
+    if (key === 'swap') {
+      router.push({ params: { seId }, pathname: '/pick-exercise' })
+      return
+    }
+    // Quitar un ejercicio se lleva puestas sus series: sin confirmación pero con deshacer, que
+    // restaura la card entera (misma posición, mismas series).
+    if (live.current.open) blur()
+    haptic('delete')
+    const removed = removeSessionExercise(seId)
+    if (!removed) return
+    toast.show({
+      actionLabel: t('common.undo'),
+      onAction: () => {
+        haptic('undo')
+        restoreSessionExercise(removed)
+      },
+      text: t('session.exerciseRemoved'),
+    })
+  }
+
+  const handleHeaderMenu = (key: string) => {
+    // Lo primero: confirmar lo que estaba a medio tipear. Terminar con el numpad abierto barría la
+    // serie recién escrita (y con ella el ejercicio, si era la única).
+    blur()
+    if (key === 'edit') {
+      router.push({ params: { id: sessionId }, pathname: '/session-edit' })
+      return
+    }
+    if (key === 'finish') {
+      confirm(
+        t('session.finishConfirm.title'),
+        t('session.finishConfirm.body'),
+        t('session.finishConfirm.action'),
+        false,
+        () => {
+          haptic('success')
+          endSession(sessionId)
+          router.back()
+        },
+      )
+      return
+    }
+    // Terminada, "descartar" es "borrar del historial": otro texto para otra consecuencia.
+    const ended = live.current.tree?.session.endedAt !== null
+    confirm(
+      t(ended ? 'session.deleteConfirm.title' : 'session.discardConfirm.title'),
+      t(ended ? 'session.deleteConfirm.body' : 'session.discardConfirm.body'),
+      t(ended ? 'session.deleteConfirm.action' : 'session.discardConfirm.action'),
+      true,
+      () => {
+        haptic('delete')
+        deleteSession(sessionId)
+        router.back()
+      },
+    )
+  }
+
+  const headerItems: MenuItem[] = active
+    ? [
+        { key: 'finish', label: t('session.finish'), md: 'check', sf: 'checkmark.circle' },
+        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
+        {
+          destructive: true,
+          key: 'discard',
+          label: t('session.discard'),
+          md: 'delete',
+          sf: 'trash',
+        },
+      ]
+    : [
+        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
+        { destructive: true, key: 'discard', label: t('common.delete'), md: 'delete', sf: 'trash' },
+      ]
+
+  return (
+    <View style={styles.screen}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Menu items={headerItems} onSelect={handleHeaderMenu}>
+              <View
+                accessible
+                accessibilityLabel={t('common.more')}
+                accessibilityRole="button"
+                style={styles.more}
+              >
+                <SymbolView
+                  fallback={
+                    <Text color="tint" role="title">
+                      ⋯
+                    </Text>
+                  }
+                  name={{
+                    ios: 'ellipsis.circle' as SFSymbol,
+                    android: 'more_horiz' as AndroidSymbol,
+                  }}
+                  size={22}
+                  tintColor={colors.tint}
+                />
+              </View>
+            </Menu>
+          ),
+          title: row.name ?? t('session.untitled'),
+        }}
+      />
+      <Animated.ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: spacing[6] + (open ? padHeight : 0) },
+        ]}
+        contentInsetAdjustmentBehavior="automatic"
+        onScrollBeginDrag={commit}
+        ref={scrollRef}
+        // Sin esto RN manda el scroll una sola vez por gesto y `offset` se queda viejo justo
+        // cuando enfocás una celda después de scrollear (el handler de useScrollViewOffset es un
+        // worklet: no cuesta un render).
+        scrollEventThrottle={16}
+      >
+        {tree.exercises.length === 0 ? (
+          <View style={styles.empty}>
+            <EmptyState
+              md="fitness_center"
+              sf="figure.strengthtraining.traditional"
+              title={t('session.emptyHint')}
+            />
+          </View>
+        ) : (
+          <Sortable
+            data={tree.exercises}
+            // Con el numpad arriba no se reordena: el dedo está tipeando, no arrastrando.
+            enabled={!open}
+            keyExtractor={keyOfExercise}
+            onReorder={(keys) => reorderExercises(sessionId, keys.map(Number))}
+            renderItem={(item) => {
+              // Solo la card enfocada ve cambiar el draft: las demás reciben siempre las mismas
+              // props y el compilador les devuelve el árbol cacheado, sin re-renderizar sus filas.
+              const here = open && pad !== null && item.sets.some((s) => s.id === pad.setId)
+              return (
+                // La card entra con FadeIn al agregarla (§7.6); el hueco entre cards vive acá adentro.
+                <Animated.View entering={FadeIn.duration(200)} style={styles.cardSlot}>
+                  <ExerciseCard
+                    draft={here ? draft : ''}
+                    focus={here ? pad : null}
+                    ghosts={ghosts.get(item.se.id) ?? []}
+                    item={item}
+                    onComplete={handleComplete}
+                    onDeleteSet={handleDeleteSet}
+                    onFocus={focusOn}
+                    onMenu={handleExerciseMenu}
+                    onSetMenu={handleSetMenu}
+                    settings={settings}
+                  />
+                </Animated.View>
+              )
+            }}
+            scrollableRef={scrollRef}
+          />
+        )}
+        <Button
+          md="add"
+          onPress={() => router.push({ params: { sessionId }, pathname: '/pick-exercise' })}
+          sf="plus"
+          title={t('session.addExercise')}
+          variant="tinted"
+        />
+      </Animated.ScrollView>
+      <Animated.View
+        accessibilityElementsHidden={!open}
+        importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+        onLayout={(e) => setPadHeight(e.nativeEvent.layout.height)}
+        pointerEvents={open ? 'auto' : 'none'}
+        style={[styles.pad, padStyle]}
+      >
+        <NumPad
+          field={pad?.field ?? 'weight'}
+          incrementLabel={padLabel}
+          isLast={nextFocusOf(tree, pad) === null}
+          onKey={handleKey}
+          unit={settings.unit}
+        />
+      </Animated.View>
+    </View>
+  )
+}
+
+const keyOfExercise = (item: SessionTree['exercises'][number]) => String(item.se.id)
+
+type CardProps = {
+  item: SessionTree['exercises'][number]
+  ghosts: Row[]
+  settings: Settings
+  focus: Focus | null
+  draft: string
+  onFocus: (setId: number, field: Field, pageY: number) => void
+  onComplete: (setId: number) => void
+  onSetMenu: (setId: number) => void
+  onDeleteSet: (setId: number) => void
+  onMenu: (seId: number, key: string) => void
+}
+
+function ExerciseCard({
+  item,
+  ghosts,
+  settings,
+  focus,
+  draft,
+  onFocus,
+  onComplete,
+  onSetMenu,
+  onDeleteSet,
+  onMenu,
+}: CardProps) {
+  const { se, exercise, sets } = item
+  const name = exerciseName(exercise, locale)
+  const fields = fieldsFor(exercise.metric)
+  const extra = settings.rpeMode === 'none' ? null : settings.rpeMode
+
+  return (
+    <Card style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardTitle}>
+          <PressableScale
+            accessibilityLabel={name}
+            onPress={() => router.push({ params: { id: exercise.id }, pathname: '/exercise/[id]' })}
+            scale={0.98}
+          >
+            <Text color="tint" numberOfLines={2} role="headline">
+              {name}
+            </Text>
+          </PressableScale>
+        </View>
+        <Menu items={EXERCISE_MENU} onSelect={(key) => onMenu(se.id, key)}>
+          <View
+            accessible
+            accessibilityLabel={`${t('common.more')}, ${name}`}
+            accessibilityRole="button"
+            style={styles.more}
+          >
+            <SymbolView
+              fallback={
+                <Text color="tint" role="title">
+                  ⋯
+                </Text>
+              }
+              name={{ ios: 'ellipsis.circle' as SFSymbol, android: 'more_horiz' as AndroidSymbol }}
+              size={22}
+              tintColor={colors.tint}
+            />
+          </View>
+        </Menu>
+      </View>
+      {se.note ? (
+        <Text color="secondary" role="footnote" style={styles.note}>
+          {se.note}
+        </Text>
+      ) : null}
+      <View style={styles.columns}>
+        <Text color="secondary" role="caption" style={styles.colBadge}>
+          #
+        </Text>
+        <Text color="secondary" numberOfLines={1} role="caption" style={styles.colPrev}>
+          {t('session.prevLabel')}
+        </Text>
+        {fields.map((f) => (
+          <Text color="secondary" key={f} numberOfLines={1} role="caption" style={styles.colField}>
+            {fieldLabel(f, settings.unit)}
+          </Text>
+        ))}
+        {extra ? (
+          <Text color="secondary" numberOfLines={1} role="caption" style={styles.colField}>
+            {fieldLabel(extra, settings.unit)}
+          </Text>
+        ) : null}
+        <View style={styles.colCheck} />
+      </View>
+      {/* El hueco que deja una fila borrada lo cierra RowLayout — es la única región de la card
+          con layout animation, y las filas no se arrastran (lo que se arrastra es la card). */}
+      {sets.map((set, index) => (
+        // `entering` para que una serie restaurada (deshacer) o recién agregada no aparezca de la
+        // nada mientras las de abajo bajan con RowLayout (§7.1).
+        <Animated.View entering={FadeIn.duration(200)} key={set.id} layout={RowLayout}>
+          <SwipeRow onDelete={() => onDeleteSet(set.id)}>
+            <SetRow
+              draft={focus?.setId === set.id ? draft : ''}
+              fields={fields}
+              focused={focus?.setId === set.id ? focus.field : null}
+              index={index}
+              locale={locale}
+              onComplete={() => onComplete(set.id)}
+              onFocus={(f, pageY) => onFocus(set.id, f, pageY)}
+              onKindPress={() => onSetMenu(set.id)}
+              prev={ghosts[index] ?? null}
+              set={set}
+              showRpe={settings.rpeMode}
+              unit={settings.unit}
+            />
+          </SwipeRow>
+        </Animated.View>
+      ))}
+      <PressableScale
+        accessibilityLabel={t('session.addSet')}
+        onPress={() => addSet(se.id)}
+        scale={0.98}
+        style={styles.addSet}
+      >
+        <Text color="tint" role="callout">
+          {t('session.addSet')}
+        </Text>
+      </PressableScale>
+    </Card>
+  )
+}

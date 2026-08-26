@@ -41,7 +41,7 @@ export default function Button({
   md,
 }: Props) {
   const accent = destructive ? colors.destructive : colors.tint
-  const fg = variant === 'filled' ? '#FFFFFF' : accent
+  const fg = variant === 'filled' ? colors.onTint : accent
   return (
     <PressableScale
       accessibilityLabel={title}
