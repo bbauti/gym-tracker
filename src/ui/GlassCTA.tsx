@@ -92,12 +92,24 @@ export default function GlassCTA({ primary, secondary, mode }: Props) {
         style={styles.labels}
       >
         <Animated.View style={front}>
-          <Text role="headline" style={styles.onTint}>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+            numberOfLines={1}
+            role="headline"
+            style={styles.onTint}
+          >
             {labels[mode]}
           </Text>
         </Animated.View>
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.ghost, back]}>
-          <Text role="headline" style={styles.onTint}>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+            numberOfLines={1}
+            role="headline"
+            style={styles.onTint}
+          >
             {labels[toContinue ? 'start' : 'continue']}
           </Text>
         </Animated.View>
@@ -136,7 +148,13 @@ export default function GlassCTA({ primary, secondary, mode }: Props) {
     aside = (
       <PressableScale accessibilityLabel={secondary.title} onPress={secondary.onPress}>
         <GlassSurface style={styles.face}>
-          <Text role="headline" style={styles.tinted}>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+            numberOfLines={1}
+            role="headline"
+            style={styles.tinted}
+          >
             {secondary.title}
           </Text>
         </GlassSurface>
