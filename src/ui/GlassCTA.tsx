@@ -28,6 +28,8 @@ const styles = StyleSheet.create({
   // pegado arriba; centrado, los dos comparten la línea media midan lo que midan.
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   grow: { flex: 1 },
+  stretch: { alignSelf: 'stretch' },
+  aside: { minHeight: HEIGHT, justifyContent: 'center' },
   face: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -110,7 +112,9 @@ export default function GlassCTA({ primary, secondary, mode }: Props) {
       <PressableScale
         accessibilityLabel={primary.title}
         onPress={primary.onPress}
-        style={styles.grow}
+        // `stretch` y no `flex: 1`: adentro del Pressable (columna sin alto) un flex 1 mide 0 de alto
+        // y la cápsula desborda por abajo del footer.
+        style={styles.stretch}
       >
         {glass ? (
           <GlassSurface interactive style={styles.face} tint>
@@ -142,19 +146,15 @@ export default function GlassCTA({ primary, secondary, mode }: Props) {
     aside = <Button onPress={secondary.onPress} title={secondary.title} variant="plain" />
   }
 
-  if (!glass) {
-    return (
-      <View style={styles.row}>
-        {cta}
-        {aside}
-      </View>
-    )
-  }
-  // `spacing` es la distancia a la que los dos vidrios empiezan a fundirse: la misma que el gap.
-  return (
-    <GlassContainer spacing={spacing[2]} style={styles.row}>
+  // La fila es un View común también dentro del vidrio: el contenedor nativo no centra a sus hijos
+  // y el secundario quedaba colgado arriba del primario.
+  const row = (
+    <View style={styles.row}>
       {cta}
-      {aside}
-    </GlassContainer>
+      {aside ? <View style={styles.aside}>{aside}</View> : null}
+    </View>
   )
+  if (!glass) return row
+  // `spacing` es la distancia a la que los dos vidrios empiezan a fundirse: la misma que el gap.
+  return <GlassContainer spacing={spacing[2]}>{row}</GlassContainer>
 }

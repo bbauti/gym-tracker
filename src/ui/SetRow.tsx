@@ -41,7 +41,9 @@ type Props = {
 }
 
 /** Anchos compartidos con la fila de encabezados de la card. */
-export const SET_COLUMNS = { badge: 34, prevFlex: 1.4, cellFlex: 1, check: 64 } as const
+// Las celdas van justas: "55.12" a 17 pt son ~47 pt y con la columna previa a 1.4 y el check a 64
+// se truncaba en un iPhone 16 Pro / Pixel 9.
+export const SET_COLUMNS = { badge: 34, prevFlex: 1.2, cellFlex: 1, check: 56 } as const
 
 const ROW_HEIGHT = 56
 const EMPTY = '–'
@@ -180,7 +182,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     minHeight: 44,
-    paddingHorizontal: spacing[1],
+    paddingHorizontal: spacing[1] / 2,
   },
   cellFocused: { backgroundColor: colors.fill, borderColor: colors.tint },
   check: {

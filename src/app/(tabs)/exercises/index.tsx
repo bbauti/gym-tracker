@@ -32,8 +32,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.separator,
   },
+  grow: { flex: 1 },
   rowMain: {
-    flex: 1,
     minHeight: ROW_MIN,
     justifyContent: 'center',
     paddingVertical: spacing[2],
@@ -84,19 +84,22 @@ function ExerciseRow({ item }: { item: Exercise }) {
   const fav = item.isFavorite
   return (
     <View style={[styles.row, item.isArchived && styles.archived]}>
-      <PressableScale
-        accessibilityLabel={`${name}, ${meta}`}
-        onPress={() => router.push({ pathname: '/exercise/[id]', params: { id: item.id } })}
-        scale={Press.row}
-        style={styles.rowMain}
-      >
-        <Text numberOfLines={1} style={styles.name}>
-          {name}
-        </Text>
-        <Text color="secondary" numberOfLines={1} role="footnote">
-          {meta}
-        </Text>
-      </PressableScale>
+      {/* PressableScale pone `style` en su vista interna: el flex de la fila va en un wrapper. */}
+      <View style={styles.grow}>
+        <PressableScale
+          accessibilityLabel={`${name}, ${meta}`}
+          onPress={() => router.push({ pathname: '/exercise/[id]', params: { id: item.id } })}
+          scale={Press.row}
+          style={styles.rowMain}
+        >
+          <Text numberOfLines={1} style={styles.name}>
+            {name}
+          </Text>
+          <Text color="secondary" numberOfLines={1} role="footnote">
+            {meta}
+          </Text>
+        </PressableScale>
+      </View>
       {/* Figura Y color: la favorita es acento y relleno, el resto contorno terciario. Cuarenta
           estrellas en acento le ganarían al nombre, que es lo que se lee de reojo en la lista. */}
       <IconButton
