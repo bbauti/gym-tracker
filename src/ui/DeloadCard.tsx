@@ -1,11 +1,11 @@
 import type { ComponentProps } from 'react'
 import { StyleSheet, View } from 'react-native'
-import Animated, { FadeOut } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { locale, t } from '@/i18n'
 import type { DeloadState } from '@/lib/progression'
 import Button from './Button'
 import Card from './Card'
-import { RowLayout, Timing, useEnterFade } from './motion'
+import { Exit, RowLayout, useEnterFade } from './motion'
 import PressableScale from './PressableScale'
 import Text from './Text'
 import { colors, MIN_TARGET, radius, spacing } from './tokens'
@@ -65,11 +65,7 @@ export default function DeloadCard({ state, onStart, onDismiss, onEnd, entering 
   return (
     // Un solo contenedor con layout por región (§7.2): al empezar el deload la tarjeta se encoge
     // hasta el cartel en vez de saltar.
-    <Animated.View
-      entering={entering}
-      exiting={FadeOut.duration(Timing.fast.duration).easing(Timing.fast.easing)}
-      layout={RowLayout}
-    >
+    <Animated.View entering={entering} exiting={Exit.fade} layout={RowLayout}>
       {state.active ? (
         // La card se va sin `exiting` (no retiene el alto) y el cartel entra sobre el hueco que
         // RowLayout está cerrando: si no, sería lo único del cambio que no anima (§7.1).

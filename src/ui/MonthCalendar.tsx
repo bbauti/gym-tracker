@@ -1,10 +1,12 @@
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { AccessibilityInfo, Platform, StyleSheet, View } from 'react-native'
+import Animated, { FadeIn, ZoomIn } from 'react-native-reanimated'
 import { locale, plural, t } from '@/i18n'
 import { haptic } from './haptics'
+import { Ease, MotionPolicy, Spring } from './motion'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, MIN_TARGET, spacing } from './tokens'
+import { colors, MIN_TARGET, Press, radius, spacing } from './tokens'
 
 /** Día 1 del mes de `at`, medianoche local. */
 export function startOfMonth(at: number): number {
@@ -34,6 +36,25 @@ const CIRCLE = 32
 const DOT = 5
 const CELL = '14.2857%'
 
+/**
+ * Cross-fade de la grilla al cambiar de mes: 120 ms, que es un reemplazo de contenido y no una
+ * aparición (los 200 de `Enter.fade` se leerían como que la pantalla está cargando). Instancia
+ * propia y no `Enter.fade.duration(120)` porque los builders de Reanimated son mutables: encadenar
+ * ahí le cambiaría la duración al singleton que usa toda la app.
+ */
+const MONTH_FADE = FadeIn.duration(120).easing(Ease.out).reduceMotion(MotionPolicy.ui)
+
+/**
+ * El círculo del día elegido no aparece de la nada: asienta desde 0,9 con el mismo resorte que el
+ * press. `ZoomIn` arranca en escala 0 y eso es un pop de globo, así que el inicial va a mano.
+ */
+const POP = ZoomIn.springify()
+  .mass(Spring.press.mass)
+  .damping(Spring.press.damping)
+  .stiffness(Spring.press.stiffness)
+  .withInitialValues({ transform: [{ scale: 0.9 }] })
+  .reduceMotion(MotionPolicy.ui)
+
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center' },
   title: { flex: 1 },
@@ -47,7 +68,13 @@ const styles = StyleSheet.create({
   weekday: { width: CELL, textAlign: 'center' },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   cell: { width: CELL },
-  day: { alignItems: 'center', minHeight: MIN_TARGET, paddingVertical: spacing[1] },
+  // `borderRadius` para el wash del press: la celda no tiene fondo propio, el radio es solo suyo.
+  day: {
+    alignItems: 'center',
+    borderRadius: radius.md,
+    minHeight: MIN_TARGET,
+    paddingVertical: spacing[1],
+  },
   // minWidth/minHeight y no width/height: con Dynamic Type grande el número crece y adentro de una
   // caja fija chocaría con el punto de abajo (mismo criterio que el chip de ui/Chip).
   circle: {
@@ -59,7 +86,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   today: { borderWidth: 1.5, borderColor: colors.tint },
-  selected: { backgroundColor: colors.tint },
+  // Capa aparte y no el fondo del círculo: así entra con su propia animación sin arrastrar el número
+  // ni el anillo de hoy, que quedan encima porque se pintan después.
+  selected: { backgroundColor: colors.tint, borderRadius: CIRCLE / 2 },
   onTint: { color: colors.onTint },
   dot: {
     width: DOT,
@@ -138,13 +167,18 @@ function Day({
       <PressableScale
         accessibilityLabel={label}
         accessibilityState={{ selected }}
+        highlight
         onPress={() => {
           haptic('selection')
           onPress(day)
         }}
+        scale={Press.cell}
         style={styles.day}
       >
-        <View style={[styles.circle, isToday && styles.today, selected && styles.selected]}>
+        <View style={[styles.circle, isToday && styles.today]}>
+          {selected ? (
+            <Animated.View entering={POP} style={[StyleSheet.absoluteFill, styles.selected]} />
+          ) : null}
           <Text
             color={isToday && !selected ? 'tint' : 'primary'}
             style={selected ? styles.onTint : undefined}
@@ -170,8 +204,10 @@ type Props = {
 }
 
 /**
- * D09. Cambiar de mes es instantáneo a propósito (§7.5): una grilla entera animándose en cada tap de
- * la flecha es exactamente el tipo de movimiento frecuente que el plan rechaza.
+ * D09. Cambiar de mes es un cross-fade de 120 ms sobre la grilla (`key={month}`) y nada más: una
+ * grilla entera moviéndose en cada tap de la flecha es el movimiento frecuente que el plan rechaza
+ * (§7.5). Sin `exiting`: la grilla saliente sigue ocupando su lugar en el flujo hasta terminar, así
+ * que las dos se apilarían y el calendario doblaría de alto por un frame.
  *
  * ponytail: sin gesto de swipe entre meses ni scroll infinito. Techo: solo se navega con las
  * flechas, de a un mes. Upgrade: un pager horizontal con tres meses montados.
@@ -230,7 +266,7 @@ export default function MonthCalendar({ month, onMonthChange, days, selected, on
           ))}
         </View>
       </View>
-      <View style={styles.grid}>
+      <Animated.View entering={MONTH_FADE} key={month} style={styles.grid}>
         {cells.map((day, i) =>
           i < lead ? (
             <View key={day} style={styles.cell} />
@@ -245,7 +281,7 @@ export default function MonthCalendar({ month, onMonthChange, days, selected, on
             />
           ),
         )}
-      </View>
+      </Animated.View>
     </View>
   )
 }

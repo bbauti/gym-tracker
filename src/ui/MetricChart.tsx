@@ -1,6 +1,7 @@
+import { Circle, LinearGradient, vec } from '@shopify/react-native-skia'
 import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { CartesianChart, Line } from 'victory-native'
+import { Area, CartesianChart, Line } from 'victory-native'
 import type { BodyKind } from '@/db/queries/body'
 import { locale, t } from '@/i18n'
 import { formatWeight, gToUnit, parseWeight, type Unit } from '@/lib/units'
@@ -17,6 +18,10 @@ const TICKS = 3
 const MAX_TICKS = 4
 const TICK_BOX = 40
 const MM_PER_CM = 10
+/** Mismo par que en `ExerciseChart`: punto final y relleno de tinte con alfa que muere en el eje. */
+const POINT = 3.5
+const FILL_TOP = '2E'
+const FILL_BOTTOM = '00'
 
 const dayFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' })
 const intl = locale === 'es' ? 'es-ES' : 'en-US'
@@ -118,7 +123,7 @@ export default function MetricChart({ data, unit, label }: Props) {
                 color="tertiary"
                 maxFontSizeMultiplier={1.3}
                 numberOfLines={1}
-                role="caption"
+                role="label"
                 style={styles.tickLabel}
                 tabular
               >
@@ -130,9 +135,9 @@ export default function MetricChart({ data, unit, label }: Props) {
         <View style={styles.plot}>
           <CartesianChart
             data={data}
-            // Sin esto el primer y el último punto caen sobre el borde del canvas y el trazo de
-            // 2 px con punta redonda se corta al medio.
-            domainPadding={{ bottom: 12, left: 4, right: 4, top: 12 }}
+            // Sin esto el primer y el último punto caen sobre el borde del canvas y el trazo con
+            // punta redonda se corta al medio. La derecha lleva el doble: ahí va el punto final.
+            domainPadding={{ bottom: 12, left: 4, right: 8, top: 12 }}
             onScaleChange={(_x: LinearScale, y: LinearScale) => {
               // Los ticks salen de la escala real y se saltean de a un paso CONSTANTE: agarrar
               // primero/medio/último de una lista par dibuja dos saltos distintos igual de lejos.
@@ -146,15 +151,31 @@ export default function MetricChart({ data, unit, label }: Props) {
             yAxis={NO_GRID}
             yKeys={['value']}
           >
-            {({ points }) => (
-              <Line
-                color={theme.tint}
-                points={points.value}
-                strokeCap="round"
-                strokeJoin="round"
-                strokeWidth={2}
-              />
-            )}
+            {({ chartBounds, points }) => {
+              const last = points.value[points.value.length - 1]
+              return (
+                <>
+                  <Area points={points.value} y0={chartBounds.bottom}>
+                    <LinearGradient
+                      colors={[`${theme.tint}${FILL_TOP}`, `${theme.tint}${FILL_BOTTOM}`]}
+                      end={vec(0, chartBounds.bottom)}
+                      start={vec(0, chartBounds.top)}
+                    />
+                  </Area>
+                  <Line
+                    color={theme.tint}
+                    points={points.value}
+                    strokeCap="round"
+                    strokeJoin="round"
+                    strokeWidth={2.5}
+                  />
+                  {/* La última medida, marcada: con dos puntos la línea parecía un tramo cortado. */}
+                  {last?.y == null ? null : (
+                    <Circle color={theme.tint} cx={last.x} cy={last.y} r={POINT} />
+                  )}
+                </>
+              )
+            }}
           </CartesianChart>
         </View>
       </View>

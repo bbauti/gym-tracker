@@ -3,7 +3,7 @@ import { type AccessibilityActionEvent, StyleSheet, View } from 'react-native'
 import { haptic } from './haptics'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, MIN_TARGET, radius, spacing } from './tokens'
+import { colors, MIN_TARGET, opacity, Press, radius, spacing } from './tokens'
 
 type Props = {
   value: number
@@ -45,9 +45,11 @@ const styles = StyleSheet.create({
     minWidth: MIN_TARGET,
     overflow: 'hidden',
   },
-  disabled: { opacity: 0.4 },
-  // Ancho fijo + tabular: el número cambia a 8/s y la fila no se puede mover con él.
-  value: { minWidth: 56, textAlign: 'center' },
+  disabled: { opacity: opacity.disabled },
+  // Ancho mínimo + tabular: el número cambia a 8/s y la fila no se puede mover con él.
+  // `flexShrink` (Yoga lo trae en 0) es lo único contra lo que `adjustsFontSizeToFit` puede achicar:
+  // sin eso, con Dynamic Type grande el valor se le monta a las teclas ±.
+  value: { flexShrink: 1, minWidth: 64, textAlign: 'center' },
 })
 
 type ButtonProps = {
@@ -68,9 +70,11 @@ function AdjustButton({ disabled, glyph, label, onPress, onHold, onRelease }: Bu
       // así el toque suelto sigue contando uno solo y el mantener no cuenta dos.
       delayLongPress={HOLD_MS}
       disabled={disabled}
+      highlight
       onLongPress={onHold}
       onPress={onPress}
       onPressOut={onRelease}
+      scale={Press.key}
       style={[styles.button, disabled && styles.disabled]}
     >
       <Text color="tint" role="title">
@@ -176,7 +180,14 @@ export default function Stepper({
         onPress={() => bump(-1)}
         onRelease={stop}
       />
-      <Text role="headline" style={styles.value} tabular>
+      {/* Como un BigNumber chico: el valor es el dato de la fila, no una etiqueta más. */}
+      <Text
+        adjustsFontSizeToFit
+        numberOfLines={1}
+        role="titleEmphasized"
+        style={styles.value}
+        tabular
+      >
         {display}
       </Text>
       <AdjustButton

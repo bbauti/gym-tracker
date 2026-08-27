@@ -24,6 +24,18 @@ export type ChartTheme = {
   /** El riel de una barra o la celda sin datos del heatmap. */
   track: string
   trackOpacity: number
+  /**
+   * Azul → índigo, los dos stops de `GradientSurface` y del relleno de `Sparkline` (§12.3). El
+   * segundo no cambia por esquema: #5E5CE6 da 5:1 contra el blanco del CTA en light y en dark, así
+   * que el texto encima se lee igual en los dos.
+   */
+  gradient: [string, string]
+  /** El segundo acento, para la serie de contraste de un Ring. */
+  indigo: string
+  /** Semáforo de las bandas de volumen adentro del Canvas: el par de `colors.success/...`. */
+  success: string
+  warning: string
+  destructive: string
 }
 
 const LIGHT: ChartTheme = {
@@ -31,6 +43,11 @@ const LIGHT: ChartTheme = {
   tint: '#007AFF',
   track: '#787880',
   trackOpacity: 0.16,
+  gradient: ['#007AFF', '#5E5CE6'],
+  indigo: '#5856D6',
+  success: '#34C759',
+  warning: '#FF9500',
+  destructive: '#FF3B30',
 }
 
 const DARK: ChartTheme = {
@@ -38,6 +55,11 @@ const DARK: ChartTheme = {
   tint: '#0A84FF',
   track: '#787880',
   trackOpacity: 0.3,
+  gradient: ['#0A84FF', '#5E5CE6'],
+  indigo: '#5E5CE6',
+  success: '#30D158',
+  warning: '#FF9F0A',
+  destructive: '#FF453A',
 }
 
 export function useChartTheme(): ChartTheme {

@@ -1,8 +1,10 @@
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { StyleSheet, View } from 'react-native'
+import GradientSurface from './GradientSurface'
+import { haptic } from './haptics'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, radius, spacing } from './tokens'
+import { colors, opacity, radius, spacing } from './tokens'
 
 type Props = {
   title: string
@@ -12,7 +14,9 @@ type Props = {
    * "Empezar, botón" idénticos, y el cuerpo de la card es otro elemento accesible: no se hereda.
    */
   accessibilityLabel?: string
-  variant?: 'filled' | 'tinted' | 'plain'
+  /** `hero` es el primario de una pantalla: degradado, 56 pt y radio xl. Uno solo a la vista. */
+  variant?: 'filled' | 'tinted' | 'plain' | 'hero'
+  size?: 'md' | 'lg'
   destructive?: boolean
   disabled?: boolean
   sf?: string
@@ -21,19 +25,24 @@ type Props = {
 }
 
 const styles = StyleSheet.create({
+  // `overflow: hidden` recorta el wash, el degradado y el highlight del press al radio que toque.
   base: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[2],
-    minHeight: 50,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2],
-    borderRadius: radius.md,
+    overflow: 'hidden',
   },
-  wash: { opacity: 0.15, borderRadius: radius.md },
-  disabled: { opacity: 0.4 },
+  md: { minHeight: 50, borderRadius: radius.md },
+  lg: { minHeight: 56, borderRadius: radius.lg, paddingHorizontal: spacing[5] },
+  // Manda sobre el `size`: un hero mide siempre lo mismo.
+  hero: { minHeight: 56, borderRadius: radius.xl },
+  wash: { opacity: opacity.wash },
+  disabled: { opacity: opacity.disabled },
   label: { flexShrink: 1 },
+  heroLabel: { fontWeight: '700' },
 })
 
 export default function Button({
@@ -41,25 +50,34 @@ export default function Button({
   accessibilityLabel,
   onPress,
   variant = 'filled',
+  size = 'md',
   destructive,
   disabled,
   sf,
   md,
 }: Props) {
+  const primary = variant === 'filled' || variant === 'hero'
   const accent = destructive ? colors.destructive : colors.tint
-  const fg = variant === 'filled' ? colors.onTint : accent
+  const fg = primary ? colors.onTint : accent
   return (
     <PressableScale
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityState={{ disabled: Boolean(disabled) }}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        // Solo el primario (§12.3): un `tinted`/`plain` es la acción de al lado y no se gana un golpe.
+        if (primary) haptic('buttonPrimary')
+        onPress()
+      }}
       style={[
         styles.base,
+        styles[size],
+        variant === 'hero' && styles.hero,
         variant === 'filled' && { backgroundColor: accent },
         disabled && styles.disabled,
       ]}
     >
+      {variant === 'hero' && <GradientSurface style={StyleSheet.absoluteFill} />}
       {variant === 'tinted' && (
         <View
           pointerEvents="none"
@@ -74,7 +92,10 @@ export default function Button({
           tintColor={fg}
         />
       ) : null}
-      <Text role="headline" style={[styles.label, { color: fg }]}>
+      <Text
+        role="headline"
+        style={[styles.label, variant === 'hero' && styles.heroLabel, { color: fg }]}
+      >
         {title}
       </Text>
     </PressableScale>

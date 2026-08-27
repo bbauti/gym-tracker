@@ -1,10 +1,10 @@
 import Constants from 'expo-constants'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { StyleSheet, View } from 'react-native'
-import Animated, { FadeOut } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { t } from '@/i18n'
 import Button from './Button'
-import { Timing } from './motion'
+import { Exit } from './motion'
 import Text from './Text'
 import { colors, spacing } from './tokens'
 
@@ -38,7 +38,7 @@ export default function LockScreen({ onUnlock, busy, failed }: Props) {
   return (
     <Animated.View
       accessibilityViewIsModal
-      exiting={FadeOut.duration(Timing.fast.duration).easing(Timing.fast.easing)}
+      exiting={Exit.fade}
       style={[StyleSheet.absoluteFill, styles.wrap]}
     >
       {/* Decorativo: el estado ya lo dice el texto de abajo. En Android el símbolo es un <Text> con

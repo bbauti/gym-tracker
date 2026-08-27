@@ -5,7 +5,7 @@ import type { Muscle } from '@/db/schema'
 import { t } from '@/i18n'
 import { type ChartTheme, useChartTheme } from './chartTheme'
 import Text from './Text'
-import { spacing } from './tokens'
+import { radius, spacing } from './tokens'
 
 /** Caja de diseño de UNA figura: los paths van a mano en estas unidades y se escalan al ancho. */
 const FIG_W = 120
@@ -87,16 +87,20 @@ const BACK: Array<[Muscle, string]> = [
   ['calves', CALVES],
 ]
 
-/** Del riel al tinte. El alpha sube con la carga: en 0 el músculo queda igual que la silueta. */
+/**
+ * Del riel al tinte y del tinte al índigo — los dos stops de `chartTheme.gradient`. El máximo no es
+ * "más azul" sino otro tono: es lo que separa un 0,8 de un 1 en un mapa que no lleva números.
+ * El alpha sube con la carga: en 0 el músculo queda igual que la silueta.
+ */
 const fillColor = (load: number, theme: ChartTheme) =>
-  interpolateColors(load, [0, 1], [theme.track, theme.tint])
+  interpolateColors(load, [0, 0.5, 1], [theme.track, theme.gradient[0], theme.gradient[1]])
 const fillOpacity = (load: number, theme: ChartTheme) =>
   theme.trackOpacity + (1 - theme.trackOpacity) * load
 
 const LEGEND_STEPS = [0, 0.25, 0.5, 0.75, 1]
-const SWATCH = 14
+// 18 y no 14: con `radius.xs` un swatch de 14 sale casi redondo y la rampa se lee como puntos.
+const SWATCH = 18
 const SWATCH_GAP = 2
-const SWATCH_R = 3
 const LEGEND_W = LEGEND_STEPS.length * SWATCH + (LEGEND_STEPS.length - 1) * SWATCH_GAP
 
 const styles = StyleSheet.create({
@@ -206,7 +210,7 @@ export default function MuscleMap({ load, label }: Props) {
               height={SWATCH}
               key={step}
               opacity={fillOpacity(step, theme)}
-              r={SWATCH_R}
+              r={radius.xs}
               width={SWATCH}
               x={i * (SWATCH + SWATCH_GAP)}
               y={0}

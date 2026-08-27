@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native'
 import { haptic } from './haptics'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, radius, spacing } from './tokens'
+import { colors, opacity, radius, spacing } from './tokens'
 
 type Props = {
   label: string
@@ -33,7 +33,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   // colors.tint es un PlatformColor: no se le puede bajar el alpha, se lava con una capa encima.
-  wash: { backgroundColor: colors.tint, opacity: 0.18, borderRadius: radius.lg },
+  wash: { backgroundColor: colors.tint, opacity: opacity.wash, borderRadius: radius.lg },
 })
 
 export default function Chip({
@@ -49,6 +49,7 @@ export default function Chip({
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
       accessibilityState={{ selected }}
+      highlight
       onPress={() => {
         // Un chip siempre cambia el filtro (el seleccionado se apaga), así que el press es el cambio.
         haptic('selection')
@@ -67,7 +68,10 @@ export default function Chip({
           tintColor={selected ? colors.tint : colors.secondaryLabel}
         />
       ) : null}
-      <Text color={selected ? 'tint' : 'secondary'} numberOfLines={1} role="footnote">
+      {/* Mismo rol en los dos estados: cambiar el peso ensancha el chip y la fila entera se corre
+          bajo el dedo. El estado lo dicen el lavado y el color, que además se lee (el tint sobre su
+          propio lavado da 2,5:1). */}
+      <Text color={selected ? 'primary' : 'secondary'} numberOfLines={1} role="label">
         {label}
       </Text>
     </PressableScale>

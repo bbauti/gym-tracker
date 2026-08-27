@@ -8,11 +8,13 @@ import {
 } from 'react-native'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, MIN_TARGET, spacing } from './tokens'
+import { colors, MIN_TARGET, Press, spacing } from './tokens'
 
 type Props = {
   title: string
   subtitle?: string
+  /** `label` (13/600) para un dato al pie del título; `footnote` (13/400) para una descripción. */
+  subtitleRole?: 'footnote' | 'label'
   trailing?: ReactNode
   onPress?: () => void
   chevron?: boolean
@@ -41,6 +43,7 @@ const styles = StyleSheet.create({
 export default function ListRow({
   title,
   subtitle,
+  subtitleRole = 'footnote',
   trailing,
   onPress,
   chevron,
@@ -53,7 +56,7 @@ export default function ListRow({
       <View style={styles.labels}>
         <Text numberOfLines={1}>{title}</Text>
         {subtitle ? (
-          <Text color="secondary" numberOfLines={1} role="footnote">
+          <Text color="secondary" numberOfLines={1} role={subtitleRole}>
             {subtitle}
           </Text>
         ) : null}
@@ -90,8 +93,9 @@ export default function ListRow({
     <PressableScale
       {...a11y}
       accessibilityLabel={a11yLabel}
+      highlight
       onPress={onPress}
-      scale={0.98}
+      scale={Press.row}
       style={styles.container}
     >
       {content}

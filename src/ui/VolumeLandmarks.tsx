@@ -5,8 +5,9 @@ import { locale, plural, t } from '@/i18n'
 import { type Landmark, landmarkZone, type Zone } from '@/lib/progression'
 import Card from './Card'
 import PressableScale from './PressableScale'
+import ProgressBar from './ProgressBar'
 import Text from './Text'
-import { colors, MIN_TARGET, spacing } from './tokens'
+import { colors, MIN_TARGET, Press, radius, spacing } from './tokens'
 
 export type VolumeRow = { muscle: Muscle; sets: number; landmark: Landmark }
 
@@ -27,7 +28,9 @@ const ZONE_COLOR: Record<Zone, ColorValue> = {
 
 const styles = StyleSheet.create({
   card: { gap: spacing[2] },
+  // `borderRadius` para el wash del press: la fila no tiene fondo propio, el radio es solo suyo.
   row: {
+    borderRadius: radius.sm,
     gap: spacing[1],
     justifyContent: 'center',
     minHeight: MIN_TARGET,
@@ -35,18 +38,6 @@ const styles = StyleSheet.create({
   },
   head: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
   grow: { flex: 1 },
-  track: { backgroundColor: colors.fill, borderRadius: 4, height: 8, overflow: 'hidden' },
-  // Punta redondeada del lado del dato, cuadrada contra la línea de base (igual que Progreso).
-  fill: { borderBottomRightRadius: 4, borderTopRightRadius: 4, height: 8 },
-  // Muescas del color de la card: se leen igual sobre el relleno y sobre la pista vacía.
-  tick: {
-    backgroundColor: colors.secondaryGroupedBackground,
-    bottom: 0,
-    marginLeft: -1,
-    position: 'absolute',
-    top: 0,
-    width: 2,
-  },
 })
 
 function Row({ muscle, sets, landmark }: VolumeRow) {
@@ -55,7 +46,6 @@ function Row({ muscle, sets, landmark }: VolumeRow) {
   const setsText = setsFormat.format(sets)
   // El 1 es red de seguridad: sin MRV la barra no tendría escala (esos músculos no llegan acá).
   const max = Math.max(landmark.mrv * TRACK_HEADROOM, sets, 1)
-  const pct = (v: number) => Math.min(100, (v / max) * 100)
   // Media serie cae en "otras", que es lo correcto en los dos idiomas ("0,5 series" / "0.5 sets").
   const vars = { muscle: name, sets: setsText, zone: t(`landmarks.zone.${zone}`) }
   const label = plural(sets, t('landmarks.a11y.one', vars), t('landmarks.a11y.other', vars))
@@ -64,9 +54,10 @@ function Row({ muscle, sets, landmark }: VolumeRow) {
     <PressableScale
       accessibilityHint={t('landmarks.edit')}
       accessibilityLabel={label}
+      highlight
       onPress={() => router.push(`/landmarks?muscle=${muscle}`)}
       // Fila de ancho completo: el 0.96 por defecto es para controles chicos y acá se notaría.
-      scale={0.98}
+      scale={Press.row}
       style={styles.row}
     >
       <View style={styles.head}>
@@ -77,15 +68,17 @@ function Row({ muscle, sets, landmark }: VolumeRow) {
           {setsText}
         </Text>
       </View>
-      {/* Sin animación: el volumen de la semana cambia una vez por sesión, no por frame (§7.5). */}
-      <View style={styles.track}>
-        <View
-          style={[styles.fill, { backgroundColor: ZONE_COLOR[zone], width: `${pct(sets)}%` }]}
-        />
-        {TICKS.map((k) => (
-          <View key={k} style={[styles.tick, { left: `${pct(landmark[k])}%` }]} />
-        ))}
-      </View>
+      {/* Decorativa: la fila ya se anuncia con las series y la banda en palabras, y un
+          `progressbar` adentro sería una segunda parada que dice lo mismo en porcentaje. */}
+      <ProgressBar
+        accessibilityElementsHidden
+        color={ZONE_COLOR[zone]}
+        height={8}
+        importantForAccessibility="no-hide-descendants"
+        progress={sets / max}
+        roundedEnd
+        ticks={TICKS.map((k) => landmark[k] / max)}
+      />
     </PressableScale>
   )
 }

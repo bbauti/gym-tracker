@@ -5,6 +5,7 @@ import Animated, {
   type SharedValue,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated'
@@ -14,7 +15,7 @@ import { project, rubberband } from '@/lib/gesture'
 import { Spring, Timing } from './motion'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, MIN_TARGET, radius, spacing } from './tokens'
+import { colors, MIN_TARGET, outline, radius, shadow, spacing } from './tokens'
 
 type ToastOptions = {
   text: string
@@ -34,6 +35,7 @@ const DEFAULT_MS = 4000
 /** Con lector de pantalla el reloj se triplica: encontrar el botón barriendo no entra en 4 s. */
 const SCREEN_READER_FACTOR = 3
 const OFFSET = 120 // arranca (y sale) por abajo, fuera de su lugar de reposo
+const CROSSFADE_DIP = 0.4 // hasta dónde baja al reimprimirse; a 0 se lee como dos toasts
 const DISMISS_PX = 45 // §7.3: 45 px O 110 px/s, sobre la posición proyectada
 const DISMISS_V = 110
 const EDGE = 80 // dimensión del rubberband para arriba/izquierda (no se descarta por ahí)
@@ -78,7 +80,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.secondaryGroupedBackground,
     borderRadius: radius.lg,
-    elevation: 4,
     flexDirection: 'row',
     gap: spacing[2],
     marginHorizontal: spacing[4],
@@ -86,10 +87,6 @@ const styles = StyleSheet.create({
     paddingLeft: spacing[4],
     paddingRight: spacing[2],
     paddingVertical: spacing[2],
-    shadowColor: '#000000',
-    shadowOffset: { height: 4, width: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
   },
   text: { flex: 1 },
   action: {
@@ -137,15 +134,26 @@ export function ToastHost() {
   // La acción sigue siendo tocable los 200 ms que tarda en irse, y `restoreSet` no es idempotente:
   // el segundo toque reventaría con UNIQUE constraint en medio del entrenamiento.
   const fired = useRef(false)
+  // Id del toast que sigue en pantalla, 0 si no hay ninguno. Uno que reemplaza a otro NO vuelve a
+  // entrar: entrar desde abajo estando ya arriba se lee como un salto. Se cruza en el lugar (§12.4).
+  const shownId = useRef(0)
 
   useEffect(() => {
-    if (!item) return
+    if (!item) {
+      shownId.current = 0
+      return
+    }
     const id = item.id
-    // Si ya estaba puesto, esto es un no-op: el toast nuevo solo reinicia el reloj, no re-entra.
+    const replacing = shownId.current !== 0 && shownId.current !== id
+    shownId.current = id
     fired.current = false
     tx.set(0)
-    ty.set(withTiming(0, Timing.toast))
-    opacity.set(withTiming(1, Timing.toast))
+    ty.set(withTiming(0, replacing ? Timing.fast : Timing.toast))
+    opacity.set(
+      replacing
+        ? withSequence(withTiming(CROSSFADE_DIP, Timing.fast), withTiming(1, Timing.fast))
+        : withTiming(1, Timing.toast),
+    )
 
     let remaining = item.duration ?? DEFAULT_MS
     let startedAt = Date.now()
@@ -246,6 +254,8 @@ export function ToastHost() {
           accessibilityLiveRegion="polite"
           style={[
             styles.toast,
+            shadow.floating,
+            outline,
             { marginBottom: insets.bottom + spacing[3] + (item.bottom ?? 0) },
             animated,
           ]}

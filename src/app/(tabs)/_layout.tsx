@@ -1,9 +1,36 @@
+import { useSegments } from 'expo-router'
 import { NativeTabs } from 'expo-router/unstable-native-tabs'
+import { useEffect, useRef } from 'react'
 import { t } from '@/i18n'
+import { haptic } from '@/ui/haptics'
+
+/**
+ * El háptico de cambiar de pestaña (§12.3) sale de la ruta y no de `tabPress`: volver a tocar la
+ * pestaña activa hace scroll-to-top, que no es un cambio y no se vibra.
+ *
+ * Fuera del grupo (un push a /settings) no hay pestaña: se ignora en vez de guardarse, si no volver
+ * del push sonaría como cambio. Por lo mismo la primera pestaña conocida solo se anota — en el
+ * montaje no hubo cambio.
+ */
+function useTabChangeHaptic(): void {
+  const segments: string[] = useSegments()
+  // '' es la raíz del grupo (la pestaña de entrenar); null, que estamos fuera de las tabs.
+  const tab = segments[0] === '(tabs)' ? (segments[1] ?? '') : null
+  const prev = useRef<string | null>(null)
+  useEffect(() => {
+    if (tab === null) return
+    const before = prev.current
+    prev.current = tab
+    if (before !== null && before !== tab) haptic('tabChange')
+  }, [tab])
+}
 
 export default function TabsLayout() {
+  useTabChangeHaptic()
   return (
-    <NativeTabs>
+    // `minimizeBehavior` es iOS 26+: la barra se encoge al bajar y vuelve al subir, que es lo que
+    // deja respirar al contenido largo. En Android el prop ni se lee (NativeTabsView.android.js).
+    <NativeTabs minimizeBehavior="onScrollDown">
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>{t('tabs.train')}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon md="fitness_center" sf="dumbbell" />

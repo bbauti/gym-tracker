@@ -62,10 +62,17 @@ export default function Sortable<T>({
   return (
     <Sortables.Grid
       activeItemScale={1.03}
-      activeItemShadowOpacity={0.2}
+      // `shadow.lifted` no entra tal cual: la librería dibuja la sombra en la CELDA (que incluye el
+      // hueco entre cards) con geometría fija de halo 0/0/5 y solo expone el alfa, así que sube para
+      // pesar como los 12/28 px del token. En Android no dibuja ninguna (`useItemDecoration` corta
+      // con `!IS_ANDROID`) y el levantado queda todo en la escala.
+      activeItemShadowOpacity={0.3}
       columns={1}
       data={data}
       dragActivationDelay={250}
+      // El default (300) empata con el levantado: §7.2 pide la salida en 0.5-0.7x de la entrada, y
+      // acá el dedo ya se fue de la pantalla.
+      dropAnimationDuration={180}
       // El offset de agarre se respeta: con snap el ítem se teleporta a centrarse bajo el dedo.
       enableActiveItemSnap={false}
       // Los hápticos son los nuestros (§7.4), vía callbacks; los de la librería quedan apagados.

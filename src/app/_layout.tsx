@@ -22,9 +22,10 @@ import { available, unlock } from '@/lock'
 import { configureNotifications } from '@/notifications'
 import { setup as setupQuickActions } from '@/quickActions'
 import Button from '@/ui/Button'
+import { CelebrationHost } from '@/ui/Celebration'
 import { haptic, setHapticsEnabled } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import LockScreen from '@/ui/LockScreen'
-import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
 import { ToastHost } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/tokens'
@@ -42,21 +43,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   centered: { textAlign: 'center' },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
 })
 
 /** El modal no tiene botón atrás: sin esto solo se cierra arrastrando (y con VoiceOver, con nada). */
 function DoneButton() {
   return (
-    <PressableScale
-      accessibilityLabel={t('settings.done')}
+    <IconButton
+      label={t('settings.done')}
+      md="check"
       onPress={() => router.back()}
-      style={styles.done}
-    >
-      <Text color="tint" role="headline">
-        {t('settings.done')}
-      </Text>
-    </PressableScale>
+      sf="checkmark"
+      tint="tint"
+    />
   )
 }
 
@@ -312,6 +310,8 @@ function Gate() {
           <Stack.Screen name="start" options={{ animation: 'none' }} />
         </Stack>
         <ToastHost />
+        {/* Encima del toast y sin robarle taps a nadie: la sesión la dispara justo antes de irse. */}
+        <CelebrationHost />
       </View>
       {/* Último: tapa todo, tabs y toasts incluidos. Con el bloqueo apagado no se monta nunca. */}
       {lock.locked ? (

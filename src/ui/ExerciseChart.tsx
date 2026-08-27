@@ -1,13 +1,14 @@
-import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
+import { Circle, LinearGradient, vec } from '@shopify/react-native-skia'
 import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { CartesianChart, Line } from 'victory-native'
+import { Area, CartesianChart, Line } from 'victory-native'
 import { locale, t } from '@/i18n'
 import { gToUnit, type Unit } from '@/lib/units'
 import { useChartTheme } from './chartTheme'
-import PressableScale from './PressableScale'
+import { haptic } from './haptics'
+import IconButton from './IconButton'
 import Text from './Text'
-import { colors, MIN_TARGET, spacing } from './tokens'
+import { radius, spacing } from './tokens'
 
 /**
  * Sin `yAxis` victory NO se queda sin eje: `buildChartAxis` cae en `[{ ...YAxisDefaults, yKeys }]`
@@ -25,6 +26,12 @@ const TICKS = 3
 const MAX_TICKS = 4
 const DOT = 8
 const TICK_BOX = 40
+/** Radio del punto que cierra la serie del tinte: apenas más ancho que el trazo de 2,5. */
+const POINT = 3.5
+// El relleno bajo la línea es el MISMO tinte con alfa (`#RRGGBBAA`, 9 chars, que el parser CSS de
+// Skia entiende): no entra un color nuevo, solo el degradado que muere contra el eje (§12.4).
+const FILL_TOP = '2E'
+const FILL_BOTTOM = '00'
 
 const dayFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' })
 
@@ -43,20 +50,14 @@ function tickFormat(step: number): Intl.NumberFormat {
 const styles = StyleSheet.create({
   legend: { alignItems: 'center', flexDirection: 'row', paddingBottom: spacing[2] },
   keys: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: spacing[4] },
-  // 44 pt de blanco tocable arriba de un renglón de 20: el margen negativo devuelve la mitad del
-  // aire al layout (el área de toque no se achica) y la fila de la leyenda no se despega del dibujo.
-  share: {
-    alignItems: 'center',
-    height: MIN_TARGET,
-    justifyContent: 'center',
-    marginVertical: -spacing[2],
-    width: MIN_TARGET,
-  },
+  // El target de 44 pt lo pone `IconButton`; acá solo se devuelve la mitad del aire al layout (el
+  // área de toque no se achica) para que la leyenda no se despegue del dibujo.
+  share: { marginVertical: -spacing[2] },
   // La unidad va arriba de la columna de ticks: los números del eje quedan pelados y no hay que
   // repetir "kg" tres veces ni arriesgar que se corte con Dynamic Type grande.
   unit: { width: GUTTER, paddingRight: spacing[2], alignItems: 'flex-end' },
   key: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  dot: { width: DOT, height: DOT, borderRadius: DOT / 2 },
+  dot: { width: DOT, height: DOT, borderRadius: radius.pill },
   chart: { flexDirection: 'row', height: HEIGHT },
   gutter: { width: GUTTER },
   // Caja de alto fijo centrada en el tick: la etiqueta queda alineada aunque Dynamic Type la crezca.
@@ -150,22 +151,19 @@ export default function ExerciseChart({ data, unit, label, onShare }: Props) {
           <Key color={theme.muted} label={t('progress.maxWeight')} />
         </View>
         {onShare ? (
-          <PressableScale
-            accessibilityLabel={t('share.chart')}
-            onPress={onShare}
-            style={styles.share}
-          >
-            <SymbolView
-              fallback={
-                <Text color="tint" role="callout">
-                  ↑
-                </Text>
-              }
-              name={{ ios: 'square.and.arrow.up' as SFSymbol, android: 'share' as AndroidSymbol }}
-              size={20}
-              tintColor={colors.tint}
+          <View style={styles.share}>
+            <IconButton
+              fallback="↑"
+              label={t('share.chart')}
+              md="share"
+              onPress={() => {
+                haptic('sheetOpen')
+                onShare()
+              }}
+              sf="square.and.arrow.up"
+              tint="tint"
             />
-          </PressableScale>
+          </View>
         ) : null}
       </View>
 
@@ -190,7 +188,7 @@ export default function ExerciseChart({ data, unit, label, onShare }: Props) {
                   color="tertiary"
                   maxFontSizeMultiplier={1.3}
                   numberOfLines={1}
-                  role="caption"
+                  role="label"
                   style={styles.tickLabel}
                   tabular
                 >
@@ -203,8 +201,9 @@ export default function ExerciseChart({ data, unit, label, onShare }: Props) {
             <CartesianChart
               data={points}
               // left/right: sin eso el primer y el último punto caen justo sobre el borde del canvas
-              // y el trazo de 2 px con punta redonda se corta al medio.
-              domainPadding={{ bottom: 12, left: 4, right: 4, top: 12 }}
+              // y el trazo con punta redonda se corta al medio. La derecha lleva el doble porque ahí
+              // además va el punto final.
+              domainPadding={{ bottom: 12, left: 4, right: 8, top: 12 }}
               onScaleChange={(_x: LinearScale, y: LinearScale) => {
                 // d3 ya redondeó el dominio: `ticks` devuelve valores lindos y `y(v)` su píxel exacto.
                 // Se saltean de a un paso CONSTANTE — agarrar primero/medio/último de una lista par
@@ -219,24 +218,43 @@ export default function ExerciseChart({ data, unit, label, onShare }: Props) {
               yAxis={NO_GRID}
               yKeys={['top', 'e1rm']}
             >
-              {({ points: p }) => (
-                <>
-                  <Line
-                    color={theme.muted}
-                    points={p.top}
-                    strokeCap="round"
-                    strokeJoin="round"
-                    strokeWidth={2}
-                  />
-                  <Line
-                    color={theme.tint}
-                    points={p.e1rm}
-                    strokeCap="round"
-                    strokeJoin="round"
-                    strokeWidth={2}
-                  />
-                </>
-              )}
+              {({ chartBounds, points: p }) => {
+                const last = p.e1rm[p.e1rm.length - 1]
+                return (
+                  <>
+                    {/* El relleno va PRIMERO: e1RM siempre queda arriba del peso máximo (Epley
+                        nunca resta), así que pintarlo después lavaría la serie de contexto. */}
+                    <Area points={p.e1rm} y0={chartBounds.bottom}>
+                      <LinearGradient
+                        colors={[`${theme.tint}${FILL_TOP}`, `${theme.tint}${FILL_BOTTOM}`]}
+                        end={vec(0, chartBounds.bottom)}
+                        start={vec(0, chartBounds.top)}
+                      />
+                    </Area>
+                    {/* Medio punto menos de trazo que la serie del tinte: la jerarquía se lee sin
+                        cambiar el color. */}
+                    <Line
+                      color={theme.muted}
+                      points={p.top}
+                      strokeCap="round"
+                      strokeJoin="round"
+                      strokeWidth={2}
+                    />
+                    <Line
+                      color={theme.tint}
+                      points={p.e1rm}
+                      strokeCap="round"
+                      strokeJoin="round"
+                      strokeWidth={2.5}
+                    />
+                    {/* La última sesión, marcada: sin esto una serie de dos puntos parece un tramo
+                        cortado y no se ve dónde termina. */}
+                    {last?.y == null ? null : (
+                      <Circle color={theme.tint} cx={last.x} cy={last.y} r={POINT} />
+                    )}
+                  </>
+                )
+              }}
             </CartesianChart>
           </View>
         </View>

@@ -6,6 +6,10 @@ export default {
   'tabs.progress': 'Progress',
   'tabs.exercises': 'Exercises',
 
+  'train.thisWeek': 'This week',
+  'train.streak': 'Streak',
+  'train.setsLast7': 'Sets, last 7 days',
+
   'history.empty.title': 'No workouts yet',
   'history.empty.description': 'Sessions you finish will show up here.',
 
@@ -33,6 +37,7 @@ export default {
   'progress.pushPull': 'Push / pull',
   'progress.push': 'Push',
   'progress.pull': 'Pull',
+  'progress.pushPullRing': '{push} push sets and {pull} pull sets',
   'progress.neglected': 'Not trained for',
   'progress.days.one': '{n} day',
   'progress.days.other': '{n} days',
@@ -46,6 +51,11 @@ export default {
   'pr.kind.reps_at_weight': 'Reps at {w}',
   'pr.kind.volume': 'Set volume',
   'pr.kind.e1rm': 'Estimated 1RM',
+
+  'celebration.title': 'Nice work!',
+  'celebration.subtitle': 'Workout saved.',
+  'celebration.prs.one': '{n} new record',
+  'celebration.prs.other': '{n} new records',
 
   'progression.suggested': 'Suggested {weight}',
   'progression.reason.linear': 'linear progression',
@@ -395,6 +405,7 @@ export default {
   'calc.weight': 'Weight',
   'calc.reps': 'Reps',
   'calc.result': 'Result',
+  'calc.results': 'Results',
   'calc.percentages': 'Percentages',
   'calc.warmup': 'Warm-up',
   'calc.workWeight': 'Work weight',
@@ -464,6 +475,8 @@ export default {
   'history.prevMonth': 'Previous month',
   'history.nextMonth': 'Next month',
   'history.clearDay': 'Show every day',
+  'history.monthSessions': 'Sessions this month',
+  'history.monthDays': 'Days trained',
 
   'error.title': 'Something went wrong',
   'error.retry': 'Retry',

@@ -5,6 +5,10 @@ export default {
   'tabs.progress': 'Progreso',
   'tabs.exercises': 'Ejercicios',
 
+  'train.thisWeek': 'Esta semana',
+  'train.streak': 'Racha',
+  'train.setsLast7': 'Series, 7 días',
+
   'history.empty.title': 'Todavía no hay entrenamientos',
   'history.empty.description': 'Acá van a aparecer las sesiones que termines.',
 
@@ -32,6 +36,7 @@ export default {
   'progress.pushPull': 'Empuje / tracción',
   'progress.push': 'Empuje',
   'progress.pull': 'Tracción',
+  'progress.pushPullRing': '{push} series de empuje y {pull} de tracción',
   'progress.neglected': 'Sin entrenar hace',
   'progress.days.one': '{n} día',
   'progress.days.other': '{n} días',
@@ -45,6 +50,11 @@ export default {
   'pr.kind.reps_at_weight': 'Reps a {w}',
   'pr.kind.volume': 'Volumen de serie',
   'pr.kind.e1rm': '1RM estimado',
+
+  'celebration.title': '¡Buen trabajo!',
+  'celebration.subtitle': 'Entrenamiento guardado.',
+  'celebration.prs.one': '{n} récord nuevo',
+  'celebration.prs.other': '{n} récords nuevos',
 
   'progression.suggested': 'Sugerido {weight}',
   'progression.reason.linear': 'progresión lineal',
@@ -395,6 +405,7 @@ export default {
   'calc.weight': 'Peso',
   'calc.reps': 'Repeticiones',
   'calc.result': 'Resultado',
+  'calc.results': 'Resultados',
   'calc.percentages': 'Porcentajes',
   'calc.warmup': 'Entrada en calor',
   'calc.workWeight': 'Peso de trabajo',
@@ -464,6 +475,8 @@ export default {
   'history.prevMonth': 'Mes anterior',
   'history.nextMonth': 'Mes siguiente',
   'history.clearDay': 'Ver todos los días',
+  'history.monthSessions': 'Sesiones del mes',
+  'history.monthDays': 'Días entrenados',
 
   'error.title': 'Algo salió mal',
   'error.retry': 'Reintentar',
