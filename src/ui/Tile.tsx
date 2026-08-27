@@ -99,7 +99,13 @@ export default function Tile({
       {value === undefined ? null : (
         <View style={styles.value}>
           {/* Figuras proporcionales: un número grande y solo, no una columna. */}
-          <Text adjustsFontSizeToFit numberOfLines={1} role="titleEmphasized" style={styles.number}>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+            numberOfLines={1}
+            role="displaySmall"
+            style={styles.number}
+          >
             {value}
           </Text>
           {unit ? (
