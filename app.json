@@ -37,6 +37,7 @@
       ]
     },
     "plugins": [
+      "./plugins/withoutPushEntitlement.js",
       "expo-router",
       [
         "expo-splash-screen",
