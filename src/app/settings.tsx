@@ -9,6 +9,7 @@ import {
   exportCsv,
   exportDatabase,
   exportJson,
+  importHistoryFromFile,
   listBackups,
   restoreFromBackup,
   restoreFromFile,
@@ -16,7 +17,7 @@ import {
 } from '@/db/backup'
 import { getSettings, updateSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
-import { locale, t } from '@/i18n'
+import { locale, plural, t } from '@/i18n'
 import { defaultIncrementG } from '@/lib/units'
 import { available, availableSync } from '@/lock'
 import Card from '@/ui/Card'
@@ -27,6 +28,17 @@ import PressableScale from '@/ui/PressableScale'
 import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+
+/** Las cuentas del import van casi siempre en singular: "1 sesión", no "1 sesiones". */
+const counted = (
+  n: number,
+  key:
+    | 'backup.done.importHistory.sessions'
+    | 'backup.done.importHistory.sets'
+    | 'backup.done.importHistoryCreated'
+    | 'backup.done.importHistoryDuplicates'
+    | 'backup.done.importHistorySkipped',
+) => plural(n, t(`${key}.one`, { n }), t(`${key}.other`, { n }))
 
 const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' })
 const numberFormat = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 })
@@ -510,6 +522,39 @@ export default function SettingsScreen() {
               onPress={busy ? undefined : restoreFile}
               title={t('settings.restoreFile')}
               trailing={spinner('file')}
+            />
+          </View>
+          <View style={dim('history')}>
+            <ListRow
+              onPress={press('history', async () => {
+                const result = await importHistoryFromFile()
+                if (!result) return null
+                // Aclaraciones solo si pasaron: el título ya dice lo importante. Las filas salteadas
+                // van sí o sí: media importación en silencio se descubre semanas después.
+                const body = [
+                  result.created.length > 0
+                    ? counted(result.created.length, 'backup.done.importHistoryCreated')
+                    : null,
+                  result.duplicates > 0
+                    ? counted(result.duplicates, 'backup.done.importHistoryDuplicates')
+                    : null,
+                  result.skipped > 0
+                    ? counted(result.skipped, 'backup.done.importHistorySkipped')
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+                return {
+                  title: t('backup.done.importHistory', {
+                    sessions: counted(result.sessions, 'backup.done.importHistory.sessions'),
+                    sets: counted(result.sets, 'backup.done.importHistory.sets'),
+                  }),
+                  body: body || undefined,
+                }
+              })}
+              subtitle={t('settings.importHistoryHint')}
+              title={t('settings.importHistory')}
+              trailing={spinner('history')}
             />
           </View>
           {backups.map((backup) => (

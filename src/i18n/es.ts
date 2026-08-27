@@ -142,6 +142,8 @@ export default {
   'settings.noBackup': 'Todavía no hay backups',
   'settings.restore': 'Restaurar',
   'settings.restoreFile': 'Desde un archivo…',
+  'settings.importHistory': 'Importar historial (CSV)',
+  'settings.importHistoryHint': 'Mismas columnas que el CSV que exporta la app',
   'settings.restoreConfirm.title': '¿Restaurar este backup?',
   'settings.restoreConfirm.body':
     'Se reemplazan todos los datos actuales por los del backup. No se puede deshacer.',
@@ -156,6 +158,17 @@ export default {
   'settings.wipeDone.body': 'Guardamos un backup con los datos anteriores por si querés volver.',
 
   'backup.done.restore': 'Datos restaurados',
+  'backup.done.importHistory': 'Se importaron {sessions} y {sets}',
+  'backup.done.importHistory.sessions.one': '{n} sesión',
+  'backup.done.importHistory.sessions.other': '{n} sesiones',
+  'backup.done.importHistory.sets.one': '{n} serie',
+  'backup.done.importHistory.sets.other': '{n} series',
+  'backup.done.importHistoryCreated.one': 'Se agregó {n} ejercicio a la biblioteca.',
+  'backup.done.importHistoryCreated.other': 'Se agregaron {n} ejercicios a la biblioteca.',
+  'backup.done.importHistoryDuplicates.one': 'Se salteó {n} sesión que ya estaba.',
+  'backup.done.importHistoryDuplicates.other': 'Se saltearon {n} sesiones que ya estaban.',
+  'backup.done.importHistorySkipped.one': 'Se salteó {n} fila que no se entendió.',
+  'backup.done.importHistorySkipped.other': 'Se saltearon {n} filas que no se entendieron.',
   'backup.error.invalid_file': 'Ese archivo no es un backup de Gym Tracker. No se cambió nada.',
   'backup.error.integrity': 'El backup está dañado: no se puede restaurar. No se cambió nada.',
   'backup.error.newer_schema':

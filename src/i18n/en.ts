@@ -142,6 +142,8 @@ export default {
   'settings.noBackup': 'No backups yet',
   'settings.restore': 'Restore',
   'settings.restoreFile': 'From a file…',
+  'settings.importHistory': 'Import history (CSV)',
+  'settings.importHistoryHint': 'Same columns as the CSV export',
   'settings.restoreConfirm.title': 'Restore this backup?',
   'settings.restoreConfirm.body':
     'This replaces all current data with the backup. It cannot be undone.',
@@ -156,6 +158,17 @@ export default {
   'settings.wipeDone.body': 'A backup of the previous data was saved, in case you want it back.',
 
   'backup.done.restore': 'Data restored',
+  'backup.done.importHistory': 'Imported {sessions} and {sets}',
+  'backup.done.importHistory.sessions.one': '{n} session',
+  'backup.done.importHistory.sessions.other': '{n} sessions',
+  'backup.done.importHistory.sets.one': '{n} set',
+  'backup.done.importHistory.sets.other': '{n} sets',
+  'backup.done.importHistoryCreated.one': 'Added {n} exercise to the library.',
+  'backup.done.importHistoryCreated.other': 'Added {n} exercises to the library.',
+  'backup.done.importHistoryDuplicates.one': 'Skipped {n} session that was already there.',
+  'backup.done.importHistoryDuplicates.other': 'Skipped {n} sessions that were already there.',
+  'backup.done.importHistorySkipped.one': 'Skipped {n} row that could not be read.',
+  'backup.done.importHistorySkipped.other': 'Skipped {n} rows that could not be read.',
   'backup.error.invalid_file': 'That file is not a Gym Tracker backup. Nothing was changed.',
   'backup.error.integrity': 'This backup is damaged and cannot be restored. Nothing was changed.',
   'backup.error.newer_schema':

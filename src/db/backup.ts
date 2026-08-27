@@ -2,9 +2,11 @@ import { getDocumentAsync } from 'expo-document-picker'
 import { Directory, File, Paths } from 'expo-file-system'
 import { shareAsync } from 'expo-sharing'
 import { AppState } from 'react-native'
+import { parseHistoryCsv } from '@/lib/historyCsv'
 import { gToUnit } from '@/lib/units'
 import { db, sqlite } from './client'
 import { BackupError, importInto, type SqlLike, wipeInto } from './import'
+import { type ImportHistoryResult, importHistory } from './queries/importHistory'
 import { backfillPrs } from './queries/prs'
 import { seed } from './seed'
 import { notifyAll } from './useQuery'
@@ -280,6 +282,40 @@ export async function restoreFromFile(): Promise<boolean> {
 
 export function restoreFromBackup(path: string): void {
   importDatabase(path)
+}
+
+/**
+ * Importa un CSV de historial: el que escribe `exportCsv` o uno hecho a mano con esas columnas.
+ * Resuelve `null` cuando cierran el picker, y tira BackupError si el archivo no se entiende.
+ *
+ * Suma al historial, no lo reemplaza — pero igual deja un backup antes, que es el único deshacer.
+ */
+export async function importHistoryFromFile(): Promise<
+  (ImportHistoryResult & { skipped: number }) | null
+> {
+  const picked = await getDocumentAsync({
+    // Un .csv llega como text/csv, como text/plain o sin tipo según de dónde salga.
+    type: ['text/csv', 'text/comma-separated-values', 'text/plain', '*/*'],
+    copyToCacheDirectory: true,
+  }).catch((error: unknown) => {
+    throw wrap(error)
+  })
+  if (picked.canceled || !picked.assets[0]) return null
+
+  const text = await new File(picked.assets[0].uri).text().catch((error: unknown) => {
+    throw wrap(error)
+  })
+  // Sin cabecera reconocible, o sin una sola fila legible, no hay nada que importar.
+  const parsed = parseHistoryCsv(text)
+  if (!parsed || parsed.sessions.length === 0) throw new BackupError('invalid_file')
+
+  backupNow()
+  // Los pesos del export están SIEMPRE en kg, no en la unidad de la app: el default es kg y solo una
+  // columna `unit` por fila lo cambia (la resuelve `importHistory`).
+  const result = guard(() => importHistory(parsed))
+  notifyAll()
+  // `skipped` sube: media importación en silencio es peor que un archivo que no se entiende.
+  return { ...result, skipped: parsed.skipped }
 }
 
 /**
