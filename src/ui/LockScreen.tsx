@@ -24,6 +24,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[5],
     backgroundColor: colors.groupedBackground,
   },
+  // El hero es el único control de la pantalla: ocupa el ancho, no el de su texto.
+  cta: { alignSelf: 'stretch', paddingTop: spacing[2] },
 })
 
 /**
@@ -51,11 +53,18 @@ export default function LockScreen({ onUnlock, busy, failed }: Props) {
           tintColor={colors.tertiaryLabel}
         />
       </View>
-      <Text accessibilityRole="header" role="title">
+      <Text accessibilityRole="header" role="titleEmphasized">
         {Constants.expoConfig?.name ?? 'Gym Tracker'}
       </Text>
       <Text color="secondary">{t('lock.locked')}</Text>
-      <Button disabled={busy} onPress={onUnlock} title={t(failed ? 'lock.retry' : 'lock.unlock')} />
+      <View style={styles.cta}>
+        <Button
+          disabled={busy}
+          onPress={onUnlock}
+          title={t(failed ? 'lock.retry' : 'lock.unlock')}
+          variant="hero"
+        />
+      </View>
     </Animated.View>
   )
 }

@@ -1,5 +1,4 @@
 import { router, useIsFocused } from 'expo-router'
-import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -7,22 +6,31 @@ import { listFolders } from '@/db/queries/folders'
 import { deloadState, dismissDeload, endDeload, startDeload } from '@/db/queries/progression'
 import { listRoutines, type RoutineSummary, startSessionFromDay } from '@/db/queries/routines'
 import { createSession, getActiveSessionId, getSessionTree } from '@/db/queries/session'
+import { addDays, startOfDay, streakWeeks, thisAndLastWeek, trainingDays } from '@/db/queries/stats'
 import { useQuery } from '@/db/useQuery'
 import { plural, t } from '@/i18n'
 import { elapsedMs } from '@/lib/rest'
 import { formatDuration } from '@/lib/units'
 import { ensureNotificationPermission } from '@/notifications'
+import Badge from '@/ui/Badge'
+import Bento from '@/ui/Bento'
+import BigNumber from '@/ui/BigNumber'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import DeloadCard from '@/ui/DeloadCard'
 import EmptyState from '@/ui/EmptyState'
+import GlassCTA from '@/ui/GlassCTA'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import ListRow from '@/ui/ListRow'
-import { useEnterFade } from '@/ui/motion'
+import { useEnterFade, useStagger } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
 import { useNow } from '@/ui/RestTimer'
+import SectionHeader from '@/ui/SectionHeader'
+import Sparkline from '@/ui/Sparkline'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import Tile from '@/ui/Tile'
+import { colors, opacity, Press, radius, spacing } from '@/ui/tokens'
 
 const SESSION_TABLES = ['session']
 // `session` y `set_entry` también: la última vez y la duración estimada salen de las sesiones
@@ -40,55 +48,33 @@ const ROUTINE_TABLES = [
 ]
 // El consejo sale de los ajustes (los tres relojes del deload) y de lo entrenado en las dos semanas.
 const DELOAD_TABLES = ['settings', 'session', 'set_entry', 'session_exercise']
+// Los tres tiles del hero: sesiones (session), series y su fecha (set_entry) y el join que las
+// cuelga de la sesión (session_exercise).
+const HERO_TABLES = ['session', 'set_entry', 'session_exercise']
+
+const SPARK_DAYS = 7
+/** El hero y las primeras cards entran en cascada; el resto ya está abajo del pliegue (§12.5). */
+const STAGGER_CARDS = 4
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.groupedBackground, flex: 1 },
   // La tab no tiene header propio: la fila del engranaje hace de barra y come el inset de arriba.
   header: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: spacing[2] },
-  gear: {
-    alignItems: 'center',
-    minHeight: MIN_TARGET,
-    justifyContent: 'center',
-    width: MIN_TARGET,
-  },
   content: { flexGrow: 1, gap: spacing[4], padding: spacing[4] },
   emptyBox: { justifyContent: 'center', minHeight: 240 },
-  current: { gap: spacing[1] },
-  sectionRow: { alignItems: 'center', flexDirection: 'row', minHeight: MIN_TARGET },
-  sectionTitle: {
-    flex: 1,
-    letterSpacing: 0.4,
-    paddingHorizontal: spacing[2],
-    textTransform: 'uppercase',
-  },
-  // El hitSlop de PressableScale no alcanza: en Android el toque se recorta a los límites del
-  // padre. La fila mide 44 pt (igual en TODOS los encabezados) y el botón la llena.
-  sectionAction: { justifyContent: 'center', minHeight: MIN_TARGET, paddingHorizontal: spacing[2] },
-  folderEmpty: { paddingBottom: spacing[1], paddingHorizontal: spacing[2] },
+  // `colors.tint` es un PlatformColor: no se le baja el alpha, se lava con una capa encima (Tile).
+  wash: { backgroundColor: colors.tint, borderRadius: radius.lg, opacity: opacity.wash },
+  hero: { gap: spacing[2] },
+  heroHead: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
+  grow: { flex: 1 },
+  group: { gap: spacing[2] },
   routines: { gap: spacing[3] },
   card: { gap: spacing[2] },
-  cardHead: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
-  cardTitle: { flex: 1 },
   next: { flex: 1 },
-  badge: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-  },
   // Una fila suelta con las esquinas del grupo; el último separador se recorta hacia afuera.
   rowCard: { borderRadius: radius.md, overflow: 'hidden' },
   hideSeparator: { marginBottom: -StyleSheet.hairlineWidth },
   footer: { padding: spacing[4], paddingTop: 0 },
-  footerRow: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
-  // PressableScale aplica `style` a su vista INTERNA: el flex tiene que ir en la que envuelve.
-  grow: { flex: 1 },
-  textButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[3],
-  },
 })
 
 /**
@@ -121,6 +107,27 @@ function activeSession() {
   return id === null ? null : (getSessionTree(id)?.session ?? null)
 }
 
+/**
+ * Los tres datos del bento, agregados acá con lo que ya exportan las queries (§12.2): no hay
+ * ninguna función nueva en `db/`.
+ */
+function heroStats() {
+  const now = Date.now()
+  const from = addDays(startOfDay(now), -(SPARK_DAYS - 1))
+  // `trainingDays` solo devuelve los días con algo: la serie se completa con ceros o la sparkline
+  // dibujaría siete días seguidos de entrenamiento donde hubo dos.
+  const byDay = new Map(trainingDays(from, now + 1).map((d) => [d.day, d.sets]))
+  const sets = Array.from({ length: SPARK_DAYS }, (_, i) => byDay.get(addDays(from, i)) ?? 0)
+  const week = thisAndLastWeek(now)
+  return {
+    sessions: week.current.sessions,
+    sessionsDelta: week.current.sessions - week.previous.sessions,
+    sets,
+    setsTotal: sets.reduce((a, b) => a + b, 0),
+    streak: streakWeeks(now),
+  }
+}
+
 // ponytail: segunda copia de este helper (la otra está en app/settings.tsx). Techo: cambiar el
 // formato se hace dos veces. Upgrade: `lib/time.ts` cuando aparezca la tercera.
 function relativeTime(at: number): string {
@@ -143,48 +150,64 @@ function estimatedLabel(ms: number) {
     : t('routine.estimatedHour', { h: Math.floor(min / 60), m: min % 60 })
 }
 
-/** Etiqueta chiquita y NO tocable: `ui/Chip` es un control (pide onPress y vibra al tocarlo). */
-function Badge({ label }: { label: string }) {
-  return (
-    <View style={styles.badge}>
-      <Text color="tint" role="caption">
-        {label}
-      </Text>
-    </View>
-  )
-}
-
-/** Encabezado de sección: el de ROUTINES lleva además el acceso a las carpetas (D02). */
-function SectionHeader({
-  title,
-  action,
+/**
+ * El hero sin sesión abierta (§12.5): racha, semana y ritmo de las últimas series. Tres tiles y no
+ * una pantalla de estadísticas — el detalle vive en Progreso.
+ */
+function HeroTiles({
+  rise,
+  stats,
 }: {
-  title: string
-  action?: { title: string; onPress: () => void }
+  rise: ReturnType<typeof useStagger>
+  stats: ReturnType<typeof heroStats>
 }) {
+  const delta = stats.sessionsDelta
+  const sessionsUnit = plural(stats.sessions, t('train.sessions.one'), t('train.sessions.other'))
+  const setsLabel = t('train.setsLast7A11y', { n: stats.setsTotal })
   return (
-    <View style={styles.sectionRow}>
-      <Text
-        accessibilityRole="header"
-        color="secondary"
-        numberOfLines={1}
-        role="footnote"
-        style={styles.sectionTitle}
+    <Bento.Row>
+      <Tile
+        entering={rise(0)}
+        title={t('train.streak')}
+        unit={plural(stats.streak, t('progress.weeks.one'), t('progress.weeks.other'))}
+        value={String(stats.streak)}
+      />
+      <Tile
+        // La etiqueta automática diría "+1" sin decir contra qué: la comparación es la mitad del dato.
+        accessibilityLabel={[
+          t('train.thisWeek'),
+          `${stats.sessions} ${sessionsUnit}`,
+          delta === 0
+            ? null
+            : `${delta > 0 ? '+' : '−'}${Math.abs(delta)} ${t('progress.lastWeek')}`,
+        ]
+          .filter(Boolean)
+          .join(', ')}
+        delta={
+          delta === 0 ? undefined : { sign: delta > 0 ? 1 : -1, text: String(Math.abs(delta)) }
+        }
+        entering={rise(1)}
+        title={t('train.thisWeek')}
+        unit={sessionsUnit}
+        value={String(stats.sessions)}
+      />
+      <Tile
+        accessibilityLabel={setsLabel}
+        entering={rise(2)}
+        title={t('train.setsLast7')}
+        value={String(stats.setsTotal)}
       >
-        {title}
-      </Text>
-      {action ? (
-        <PressableScale
-          accessibilityLabel={action.title}
-          onPress={action.onPress}
-          style={styles.sectionAction}
-        >
-          <Text color="tint" role="footnote">
-            {action.title}
-          </Text>
-        </PressableScale>
-      ) : null}
-    </View>
+        {(size) => (
+          <Sparkline
+            endDot
+            height={size.height}
+            label={setsLabel}
+            values={stats.sets}
+            width={size.width}
+          />
+        )}
+      </Tile>
+    </Bento.Row>
   )
 }
 
@@ -227,23 +250,22 @@ function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean
   ].join(' · ')
 
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} variant="raised">
       <PressableScale
         accessibilityLabel={[routine.name, nextDay ? t('routine.next') : null, next, meta]
           .filter(Boolean)
           .join(', ')}
+        accessibilityRole="button"
         onPress={() => router.push({ params: { id: routine.id }, pathname: '/routine/[id]' })}
-        scale={0.98}
+        scale={Press.row}
         style={styles.card}
       >
-        <View style={styles.cardHead}>
-          <Text numberOfLines={1} role="headline" style={styles.cardTitle}>
-            {routine.name}
-          </Text>
-        </View>
+        <Text numberOfLines={1} role="headline">
+          {routine.name}
+        </Text>
         {nextDay ? (
-          <View style={styles.cardHead}>
-            <Badge label={t('routine.next')} />
+          <View style={styles.heroHead}>
+            <Badge label={t('routine.next')} tone="tint" />
             <Text color="secondary" numberOfLines={1} role="footnote" style={styles.next}>
               {next}
             </Text>
@@ -264,7 +286,12 @@ function RoutineCard({ summary, busy }: { summary: RoutineSummary; busy: boolean
       {nextDay && !busy ? (
         <Button
           accessibilityLabel={`${routine.name}, ${t('routine.start', { day: nextDay.name })}`}
-          onPress={() => openSession(() => startSessionFromDay(nextDay.id))}
+          onPress={() => {
+            // El golpe va en el mismo bloque que el push (§7.1): empezar es lo que se está sintiendo.
+            haptic('sessionStart')
+            openSession(() => startSessionFromDay(nextDay.id))
+          }}
+          size="lg"
           title={t('routine.startShort')}
           variant="tinted"
         />
@@ -280,11 +307,14 @@ export default function TrainScreen() {
     () => ({ folders: listFolders(), routines: listRoutines() }),
     ROUTINE_TABLES,
   )
+  const stats = useQuery(heroStats, HERO_TABLES)
   // La ventana del deload la corre el reloj, no una escritura: si vence con la app abierta el cartel
   // se queda hasta la próxima serie. Un timer a 1 Hz para eso sería el peor cambio de la app.
   const deload = useQuery(() => deloadState(Date.now()), DELOAD_TABLES)
   // Solo la rutina recién creada entra con fade: la tab queda montada, así que "recién" es de verdad.
   const fadeIn = useEnterFade(routines.map((s) => s.routine.id))
+  // Cascada del montaje y nada más: las tabs quedan montadas, así que corre una vez por lanzamiento.
+  const rise = useStagger()
   // Mismo criterio para el deload: el consejo que ya estaba al abrir la app no aparece, y esta es la
   // pantalla de arranque — animarlo en cada cold start de la semana sería puro ruido (§7.5).
   const deloadFade = useEnterFade(deload.advise || deload.active ? ['deload'] : [])
@@ -299,6 +329,10 @@ export default function TrainScreen() {
     ? formatDuration(elapsedMs(current.startedAt, current.pausedMs, current.pausedAt, now))
     : ''
   const busy = current !== null
+  // Instalación recién hecha: tres tiles en cero no son un resumen, son una pantalla vacía con
+  // números. Ahí el hero es el dibujo de abajo y el CTA.
+  const tiles = !busy && (stats.streak > 0 || stats.sessions > 0 || stats.setsTotal > 0)
+  const staggerOffset = busy ? 1 : tiles ? 3 : 0
 
   // D02: las carpetas son cajones para mirar, no cambian en qué orden se entrena. Una rutina sin
   // carpeta (o cuya carpeta se borró: el FK dejó null) cae en el grupo de siempre.
@@ -313,61 +347,89 @@ export default function TrainScreen() {
       else byFolder.set(folderId, [summary])
     }
   }
+  // El orden de aparición es el de la pantalla (carpetas y después sueltas), no el de `routines`:
+  // la cascada tiene que bajar, y `cards` se llama una vez por grupo.
+  const order = new Map<number, number>()
+  for (const folder of folders)
+    for (const summary of byFolder.get(folder.id) ?? []) order.set(summary.routine.id, order.size)
+  for (const summary of loose) order.set(summary.routine.id, order.size)
+
   const cards = (list: RoutineSummary[]) =>
-    // Sin animación de lista: solo el FadeIn de la rutina que entra (§7.5) — las que ya estaban al
-    // abrir la tab no animan, o volver del entrenamiento se lee como carga.
-    list.map((summary) => (
-      <Animated.View entering={fadeIn(summary.routine.id)} key={summary.routine.id}>
-        <RoutineCard busy={busy} summary={summary} />
-      </Animated.View>
-    ))
+    // Fuera de la cascada del montaje, solo el FadeIn de la rutina que entra (§7.5) — las que ya
+    // estaban al abrir la tab no animan, o volver del entrenamiento se lee como carga.
+    list.map((summary) => {
+      const index = order.get(summary.routine.id) ?? 0
+      return (
+        <Animated.View
+          entering={
+            fadeIn(summary.routine.id) ??
+            (index < STAGGER_CARDS ? rise(staggerOffset + index) : undefined)
+          }
+          key={summary.routine.id}
+        >
+          <RoutineCard busy={busy} summary={summary} />
+        </Animated.View>
+      )
+    })
 
   return (
     <View style={[styles.screen, { paddingBottom: insets.bottom, paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <PressableScale
-          accessibilityLabel={t('settings.title')}
+        <IconButton
+          fallback="⚙"
+          label={t('settings.title')}
+          md="settings"
           onPress={() => router.push('/settings')}
-          style={styles.gear}
-        >
-          <SymbolView
-            fallback={<Text role="title">⚙</Text>}
-            name={{ ios: 'gearshape' as SFSymbol, android: 'settings' as AndroidSymbol }}
-            size={24}
-            tintColor={colors.label}
-          />
-        </PressableScale>
+          sf="gearshape"
+        />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         {current ? (
-          <PressableScale
-            // La card es un solo elemento para el lector: el cronómetro va en su label o no se lee.
-            accessibilityLabel={[
-              t('session.continue'),
-              current.name ?? t('session.untitled'),
-              t('session.elapsed', { time: elapsed }),
-              current.pausedAt === null ? null : t('session.paused'),
-            ]
-              .filter(Boolean)
-              .join(', ')}
-            onPress={() => {
-              askNotifications()
-              router.push({ params: { id: current.id }, pathname: '/session/[id]' })
-            }}
-            scale={0.98}
-          >
-            <Card style={styles.current}>
-              <Text role="headline">{current.name ?? t('session.untitled')}</Text>
-              <Text color="secondary" role="footnote" tabular>
-                {current.pausedAt === null ? elapsed : `${elapsed} · ${t('session.paused')}`}
-              </Text>
-              <Text color="tint" role="callout">
-                {t('session.continue')}
-              </Text>
-            </Card>
-          </PressableScale>
+          <Animated.View entering={rise(0)}>
+            <PressableScale
+              // La card es un solo elemento para el lector: el cronómetro va en su label o no se lee.
+              accessibilityLabel={[
+                t('session.continue'),
+                current.name ?? t('session.untitled'),
+                t('session.elapsed', { time: elapsed }),
+                current.pausedAt === null ? null : t('session.paused'),
+              ]
+                .filter(Boolean)
+                .join(', ')}
+              accessibilityRole="button"
+              onPress={() => {
+                askNotifications()
+                router.push({ params: { id: current.id }, pathname: '/session/[id]' })
+              }}
+              scale={Press.row}
+            >
+              <Card style={styles.hero} variant="raised">
+                <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.wash]} />
+                {/* El lector ya tiene la frase entera arriba: adentro hay un BigNumber y un Badge
+                    que en Android serían dos paradas más de TalkBack (un `accessible` no tapa a sus
+                    hijos ahí, ver ui/Tile). */}
+                <View
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                  style={styles.hero}
+                >
+                  <View style={styles.heroHead}>
+                    <Text numberOfLines={1} role="titleEmphasized" style={styles.grow}>
+                      {current.name ?? t('session.untitled')}
+                    </Text>
+                    {current.pausedAt === null ? null : (
+                      <Badge label={t('session.paused')} tone="warning" />
+                    )}
+                  </View>
+                  <BigNumber role="displaySmall" value={elapsed} />
+                </View>
+              </Card>
+            </PressableScale>
+          </Animated.View>
         ) : null}
+
+        {tiles ? <HeroTiles rise={rise} stats={stats} /> : null}
 
         {deload.advise || deload.active ? (
           <DeloadCard
@@ -399,11 +461,11 @@ export default function TrainScreen() {
         {folders.map((folder) => {
           const list = byFolder.get(folder.id) ?? []
           return (
-            <View key={folder.id}>
+            <View key={folder.id} style={styles.group}>
               <SectionHeader title={folder.name} />
               {/* Una carpeta vacía se sigue mostrando: es dónde soltar la próxima rutina. */}
               {list.length === 0 ? (
-                <Text color="tertiary" role="footnote" style={styles.folderEmpty}>
+                <Text color="tertiary" role="footnote">
                   {t('folders.empty')}
                 </Text>
               ) : (
@@ -413,7 +475,7 @@ export default function TrainScreen() {
           )
         })}
 
-        <View>
+        <View style={styles.group}>
           <SectionHeader
             action={{ onPress: () => router.push('/folders'), title: t('folders.manage') }}
             title={t('routine.title')}
@@ -438,31 +500,32 @@ export default function TrainScreen() {
         </View>
       </ScrollView>
 
-      {/* El entrenamiento libre baja a acción secundaria cuando hay rutinas, y con una sesión
-          abierta no está: misma regla que el botón de la card — el único control de esa sesión es la
-          card de "Continuar". Esta barra está fija abajo, así que un botón apagado acá sería el
-          control muerto más visible de la app. */}
-      {busy ? null : (
-        <View style={[styles.footer, styles.footerRow]}>
-          <View style={styles.grow}>
-            <Button
-              onPress={() => openSession(createSession)}
-              title={routines.length === 0 ? t('session.start') : t('routine.freeWorkout')}
-              variant={routines.length === 0 ? 'filled' : 'plain'}
-            />
-          </View>
-          {/* C11: al lado y no en su propia fila — es una herramienta, no una forma de entrenar. */}
-          <PressableScale
-            accessibilityLabel={t('intervals.title')}
-            onPress={() => router.push('/intervals')}
-            style={styles.textButton}
-          >
-            <Text color="tint" role="headline">
-              {t('intervals.title')}
-            </Text>
-          </PressableScale>
-        </View>
-      )}
+      {/* La barra no se va con un entrenamiento abierto: muta a "Continuar" (§12.5). Sigue siendo un
+          solo control vivo para esa sesión —el mismo destino que la card de arriba— y el rótulo se
+          cruza en vez de que la barra desaparezca de abajo de la pantalla.
+          El entrenamiento libre baja de rótulo cuando hay rutinas: ahí empezar es tocar una card. */}
+      <View style={styles.footer}>
+        <GlassCTA
+          mode={busy ? 'continue' : 'start'}
+          primary={{
+            md: 'play_arrow',
+            onPress: () => {
+              // Mismo bloque que el push (§7.1). Continuar es navegar y la transición ya es el
+              // feedback: ahí no vibra nada (HIG).
+              if (!busy) haptic('sessionStart')
+              openSession(createSession)
+            },
+            sf: 'play.fill',
+            title: busy
+              ? t('session.continue')
+              : routines.length === 0
+                ? t('session.start')
+                : t('routine.freeWorkout'),
+          }}
+          // C11: al lado y no en su propia fila — es una herramienta, no una forma de entrenar.
+          secondary={{ onPress: () => router.push('/intervals'), title: t('intervals.title') }}
+        />
+      </View>
     </View>
   )
 }

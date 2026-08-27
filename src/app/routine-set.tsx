@@ -9,9 +9,10 @@ import { locale, t } from '@/i18n'
 import { haptic } from '@/ui/haptics'
 import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Stepper from '@/ui/Stepper'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, opacity, spacing } from '@/ui/tokens'
 
 /** Rango de repeticiones que tiene sentido escribir a mano; arriba de 50 ya es otra cosa (D06). */
 const REPS_LO = 1
@@ -30,15 +31,6 @@ const rpeFormat = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 })
 const EMPTY = '—'
 
 const styles = StyleSheet.create({
-  // Sin flex: 1 — `fitToContents` mide el contenido y un hijo elástico mediría cero (hoja de 0 pt).
-  sheet: { backgroundColor: colors.background, gap: spacing[2], padding: spacing[4] },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: spacing[2],
-  },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
   row: { alignItems: 'center', flexDirection: 'row', gap: spacing[2], minHeight: MIN_TARGET },
   rowLabel: { flex: 1 },
   grow: { flex: 1 },
@@ -48,7 +40,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TARGET,
     minWidth: MIN_TARGET,
   },
-  disabled: { opacity: 0.4 },
+  disabled: { opacity: opacity.disabled },
 })
 
 /**
@@ -85,7 +77,9 @@ export default function RoutineSetScreen() {
   }
 
   const changeKind = (key: string) => {
-    haptic('selection')
+    // Cambiar en un picker suena distinto de apretar un botón (§12.6). Es el mismo evento que
+    // dispara `Menu`, y el gate por evento no lo deja sonar dos veces.
+    haptic('pickerChange')
     setKind(key as SetKind)
     updateRoutineSet(setId, { kind: key as SetKind })
   }
@@ -98,101 +92,90 @@ export default function RoutineSetScreen() {
   }
 
   return (
-    <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}>
-      <View style={styles.header}>
-        <Text accessibilityRole="header" role="headline">
-          {t('routineSet.title')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('common.done')}
-          onPress={() => router.back()}
-          style={styles.done}
-        >
-          <Text color="tint" role="headline">
-            {t('common.done')}
-          </Text>
-        </PressableScale>
-      </View>
+    <View style={[sheetStyles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}>
+      <SheetHeader onDone={() => router.back()} title={t('routineSet.title')} />
 
-      <Stepper
-        label={t('routineSet.min')}
-        max={REPS_HI}
-        min={REPS_LO}
-        onChange={changeMin}
-        value={repsMin}
-      />
-      {/* El mínimo es el piso del máximo: el rango no se puede dar vuelta desde la UI. */}
-      <Stepper
-        label={t('routineSet.max')}
-        max={REPS_HI}
-        min={repsMin}
-        onChange={changeMax}
-        value={repsMax}
-      />
+      <View style={sheetStyles.content}>
+        <Stepper
+          label={t('routineSet.min')}
+          max={REPS_HI}
+          min={REPS_LO}
+          onChange={changeMin}
+          value={repsMin}
+        />
+        {/* El mínimo es el piso del máximo: el rango no se puede dar vuelta desde la UI. */}
+        <Stepper
+          label={t('routineSet.max')}
+          max={REPS_HI}
+          min={repsMin}
+          onChange={changeMax}
+          value={repsMax}
+        />
 
-      {/* El trigger del Menu no es un Pressable: el menú nativo necesita el tap para abrirse. */}
-      <Menu items={KIND_ITEMS} onSelect={changeKind}>
-        <View
-          accessible
-          accessibilityLabel={t('routineSet.kind')}
-          accessibilityRole="button"
-          accessibilityValue={{ text: t(`setKind.${kind}`) }}
-          style={styles.row}
-        >
-          <Text numberOfLines={1} style={styles.rowLabel}>
-            {t('routineSet.kind')}
-          </Text>
-          <Text color="secondary" numberOfLines={1}>
-            {t(`setKind.${kind}`)}
-          </Text>
-          <SymbolView
-            fallback={
-              <Text color="tertiary" role="footnote">
-                ⌄
-              </Text>
-            }
-            name={{
-              ios: 'chevron.up.chevron.down' as SFSymbol,
-              android: 'unfold_more' as AndroidSymbol,
+        {/* El trigger del Menu no es un Pressable: el menú nativo necesita el tap para abrirse. */}
+        <Menu items={KIND_ITEMS} onSelect={changeKind}>
+          <View
+            accessible
+            accessibilityLabel={t('routineSet.kind')}
+            accessibilityRole="button"
+            accessibilityValue={{ text: t(`setKind.${kind}`) }}
+            style={styles.row}
+          >
+            <Text numberOfLines={1} style={styles.rowLabel}>
+              {t('routineSet.kind')}
+            </Text>
+            <Text color="secondary" numberOfLines={1}>
+              {t(`setKind.${kind}`)}
+            </Text>
+            <SymbolView
+              fallback={
+                <Text color="tertiary" role="footnote">
+                  ⌄
+                </Text>
+              }
+              name={{
+                ios: 'chevron.up.chevron.down' as SFSymbol,
+                android: 'unfold_more' as AndroidSymbol,
+              }}
+              size={13}
+              tintColor={colors.tertiaryLabel}
+            />
+          </View>
+        </Menu>
+
+        <View style={styles.row}>
+          <View style={styles.grow}>
+            <Stepper
+              // El guión es para el ojo: el lector dice "Sin RPE objetivo" y no "raya".
+              a11yText={rpe === null ? t('routineSet.clearRpe') : undefined}
+              format={rpe === null ? () => EMPTY : rpeFormat.format}
+              label={t('routineSet.rpe')}
+              max={RPE_HI}
+              min={RPE_LO}
+              onChange={changeRpe}
+              step={RPE_STEP}
+              value={rpe ?? RPE_DEFAULT}
+            />
+          </View>
+          {/* ponytail: el "sin RPE" es este botón y no una opción más del stepper. Techo: un target de
+              44 pt para algo que se usa poco. Upgrade: swipe sobre el valor, si molesta. */}
+          <PressableScale
+            accessibilityLabel={t('routineSet.clearRpe')}
+            accessibilityState={{ disabled: rpe === null }}
+            disabled={rpe === null}
+            onPress={() => {
+              // El háptico va en el mismo bloque que el cambio (§7.4): el Stepper ya lo hace en ±,
+              // apagarlo es el único cambio de valor de la hoja que no sonaba.
+              haptic('selection')
+              changeRpe(null)
             }}
-            size={13}
-            tintColor={colors.tertiaryLabel}
-          />
+            style={[styles.clear, rpe === null && styles.disabled]}
+          >
+            <Text color="tint" role="headline">
+              {EMPTY}
+            </Text>
+          </PressableScale>
         </View>
-      </Menu>
-
-      <View style={styles.row}>
-        <View style={styles.grow}>
-          <Stepper
-            // El guión es para el ojo: el lector dice "Sin RPE objetivo" y no "raya".
-            a11yText={rpe === null ? t('routineSet.clearRpe') : undefined}
-            format={rpe === null ? () => EMPTY : rpeFormat.format}
-            label={t('routineSet.rpe')}
-            max={RPE_HI}
-            min={RPE_LO}
-            onChange={changeRpe}
-            step={RPE_STEP}
-            value={rpe ?? RPE_DEFAULT}
-          />
-        </View>
-        {/* ponytail: el "sin RPE" es este botón y no una opción más del stepper. Techo: un target de
-            44 pt para algo que se usa poco. Upgrade: swipe sobre el valor, si molesta. */}
-        <PressableScale
-          accessibilityLabel={t('routineSet.clearRpe')}
-          accessibilityState={{ disabled: rpe === null }}
-          disabled={rpe === null}
-          onPress={() => {
-            // El háptico va en el mismo bloque que el cambio (§7.4): el Stepper ya lo hace en ±,
-            // apagarlo es el único cambio de valor de la hoja que no sonaba.
-            haptic('selection')
-            changeRpe(null)
-          }}
-          style={[styles.clear, rpe === null && styles.disabled]}
-        >
-          <Text color="tint" role="headline">
-            {EMPTY}
-          </Text>
-        </PressableScale>
       </View>
     </View>
   )

@@ -82,7 +82,13 @@ export default function GlassCTA({ primary, secondary, mode }: Props) {
           tintColor={colors.onTint}
         />
       ) : null}
-      <View style={styles.labels}>
+      {/* Los dos rótulos quedan montados para cruzarse: fuera del árbol accesible, o en Android
+          TalkBack para en el fantasma y lee "Empezar" con la barra diciendo "Continuar". */}
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={styles.labels}
+      >
         <Animated.View style={front}>
           <Text role="headline" style={styles.onTint}>
             {labels[mode]}

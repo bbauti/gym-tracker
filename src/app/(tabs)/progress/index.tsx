@@ -1,7 +1,7 @@
 import { router } from 'expo-router'
 import { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
-import Animated, { FadeIn } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { latest } from '@/db/queries/body'
 import { exerciseName, listExercises, recentExercises } from '@/db/queries/exercises'
 import { listSessions } from '@/db/queries/history'
@@ -20,19 +20,29 @@ import {
   totalTonnageG,
   trainingDays,
   volumeByMuscle,
+  weekSummary,
 } from '@/db/queries/stats'
 import { useQuery } from '@/db/useQuery'
 import { locale, plural, t } from '@/i18n'
 import { formatDuration, formatWeight, type Unit } from '@/lib/units'
 import { shareChart } from '@/share'
+import Bento from '@/ui/Bento'
+import BigNumber from '@/ui/BigNumber'
 import Card from '@/ui/Card'
 import Chip from '@/ui/Chip'
 import EmptyState from '@/ui/EmptyState'
 import ExerciseChart, { type ChartPoint } from '@/ui/ExerciseChart'
 import Heatmap from '@/ui/Heatmap'
+import { haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import MuscleMap, { topLoaded } from '@/ui/MuscleMap'
+import { useStagger } from '@/ui/motion'
+import ProgressBar from '@/ui/ProgressBar'
+import Ring from '@/ui/Ring'
+import SectionHeader from '@/ui/SectionHeader'
+import Sparkline from '@/ui/Sparkline'
 import Text from '@/ui/Text'
+import Tile from '@/ui/Tile'
 import { toast } from '@/ui/Toast'
 import { colors, radius, spacing } from '@/ui/tokens'
 import VolumeLandmarks from '@/ui/VolumeLandmarks'
@@ -49,36 +59,28 @@ const NEGLECTED_ROWS = 5
 const RECENTS = 6
 const SERIES_SESSIONS = 30
 const EMPTY = '—'
+/** Alto de la sparkline del tile de volumen: el resto del tile es el número, que es el dato. */
+const SPARK_H = 56
+/** Fijo y no medido: el anillo adentro de un tile `sm` no puede depender del alto que él mismo pide. */
+const RING = 76
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
-  content: { padding: spacing[4], gap: spacing[5] },
+  content: { padding: spacing[4], gap: spacing[3] },
   section: { gap: spacing[2] },
-  sectionHead: { paddingHorizontal: spacing[2] },
-  sectionTitle: { textTransform: 'uppercase', letterSpacing: 0.4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  stat: { flexGrow: 1, flexBasis: '46%', gap: spacing[1] },
+  // Aire extra donde arranca un tema nuevo: entre tiles del mismo bloque alcanza con el gap.
+  top: { marginTop: spacing[2] },
+  // La tira de chips llega a los bordes de la pantalla; el contenido sigue alineado al padding.
+  bleed: { marginHorizontal: -spacing[4] },
+  chips: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4] },
+  card: { borderRadius: radius.xl, gap: spacing[3] },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   grow: { flex: 1 },
-  chips: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[2] },
-  card: { gap: spacing[3] },
   bar: { gap: spacing[1] },
-  track: { height: 6, borderRadius: 3, backgroundColor: colors.fill, overflow: 'hidden' },
-  // Punta redondeada del lado del dato, cuadrada contra la línea de base.
-  fill: {
-    height: 6,
-    borderTopRightRadius: 3,
-    borderBottomRightRadius: 3,
-    backgroundColor: colors.tint,
-  },
-  divider: {
-    gap: spacing[2],
-    paddingTop: spacing[3],
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.separator,
-  },
-  // El marginBottom se come la última hairline de ListRow, que adentro del card se ve suelta.
-  group: { borderRadius: radius.md, overflow: 'hidden', marginBottom: -StyleSheet.hairlineWidth },
+  volume: { flexGrow: 1, gap: spacing[2], justifyContent: 'flex-end' },
+  center: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  // El marginBottom se come la última hairline de ListRow, que adentro del grupo se ve suelta.
+  group: { borderRadius: radius.lg, overflow: 'hidden', marginBottom: -StyleSheet.hairlineWidth },
 })
 
 /** Una marca: 82,5 kg redondeado a 83 kg deja de ser la marca. */
@@ -109,75 +111,19 @@ function days(n: number): string {
   return plural(n, t('progress.days.one', { n }), t('progress.days.other', { n }))
 }
 
-/** `header` como en el resto de la app: Progreso es el scroll más largo y el rotor tiene que pararse. */
-function SectionTitle({ children, subtitle }: { children: string; subtitle?: string }) {
-  return (
-    <View style={styles.sectionHead}>
-      <Text
-        accessibilityRole="header"
-        color="secondary"
-        role="footnote"
-        style={styles.sectionTitle}
-      >
-        {children}
-      </Text>
-      {/* La base de comparación, una sola vez: cuatro deltas firmados sin decir contra qué son
-          cuatro números sueltos, y hasta ahora eso solo lo sabía VoiceOver. */}
-      {subtitle ? (
-        <Text color="tertiary" role="caption">
-          {subtitle}
-        </Text>
-      ) : null}
-    </View>
-  )
+/** G11. Con 0 no se dibuja nada: "sin cambios" no merece una línea. */
+function delta(diff: number, text: string): { text: string; sign: 1 | 0 | -1 } | undefined {
+  return diff === 0 ? undefined : { sign: diff > 0 ? 1 : -1, text }
 }
 
 /**
- * G11. El delta va firmado y en terciario: la comparación es contexto, el número de esta semana es
- * el dato. Con 0 no se dibuja nada — "sin cambios" no merece una línea.
+ * La base de comparación, en cada tile con delta: cuatro números firmados sin decir contra qué son
+ * cuatro números sueltos, y el subtítulo de la sección no viaja con el foco del rotor.
  */
-function Stat({
-  label,
-  value,
-  delta,
-  deltaText,
-}: {
-  label: string
-  value: string
-  delta: number
-  deltaText: string
-}) {
-  const a11y =
-    delta === 0
-      ? `${label}: ${value}`
-      : `${label}: ${value}, ${delta > 0 ? '+' : '−'}${deltaText} ${t('progress.lastWeek')}`
-  return (
-    <Card style={styles.stat}>
-      <View accessible accessibilityLabel={a11y}>
-        <Text color="secondary" role="footnote">
-          {label}
-        </Text>
-        {/* Figuras proporcionales, no tabulares: un número grande y solo, no una columna. */}
-        <Text role="title">{value}</Text>
-        {delta === 0 ? null : (
-          <Text color="tertiary" role="caption" tabular>
-            {`${delta > 0 ? '▲' : '▼'} ${deltaText}`}
-          </Text>
-        )}
-      </View>
-    </Card>
-  )
-}
-
-function BestRow({ label, value }: { label: string; value: string }) {
-  return (
-    <View accessible accessibilityLabel={`${label}: ${value}`} style={styles.row}>
-      <Text color="secondary" style={styles.grow}>
-        {label}
-      </Text>
-      <Text tabular>{value}</Text>
-    </View>
-  )
+function statLabel(label: string, value: string, diff: number, text: string): string {
+  return diff === 0
+    ? `${label}: ${value}`
+    : `${label}: ${value}, ${diff > 0 ? '+' : '−'}${text} ${t('progress.lastWeek')}`
 }
 
 function useStats() {
@@ -221,6 +167,12 @@ function useStats() {
 export default function ProgressScreen() {
   const unit = useQuery(() => getSettings().unit, ['settings'])
   const stats = useStats()
+  // La forma de las 12 semanas para la sparkline: `weekSummary` ya recorta la semana en curso a hoy.
+  const weekly = useQuery(() => {
+    const now = Date.now()
+    const first = addDays(startOfWeek(now), -7 * (WEEKS - 1))
+    return Array.from({ length: WEEKS }, (_, i) => weekSummary(addDays(first, i * 7), now).volumeG)
+  }, TABLES)
   const bodyweight = useQuery(() => latest('bodyweight'), ['body_metric'])
   // Recientes primero y después los favoritos que no estén: un ejercicio que no tocás hace dos
   // meses es justo el que querés mirar acá, y por recientes no aparece nunca.
@@ -255,6 +207,9 @@ export default function ProgressScreen() {
       .map((m) => ({ landmark: lm[m.muscle], muscle: m.muscle, sets: m.sets }))
   }, VOLUME_TABLES)
 
+  // Una sola cascada, al montar: los gráficos nunca se re-animan al refrescarse (§12.6).
+  const enter = useStagger()
+
   if (!stats.hasData) {
     return (
       <View style={styles.screen}>
@@ -274,10 +229,6 @@ export default function ProgressScreen() {
   const trained = stats.grid.filter((d) => d.sets > 0).length
   // 'Series' es la etiqueta de una card; en medio de una frase va en minúscula ("12 series").
   const setsWord = t('progress.sets').toLocaleLowerCase(locale)
-  // "Empuje / tracción: 12 / 9" no se puede leer en voz alta: la barra del título y la del valor
-  // suenan igual (o se caen), y no queda forma de saber cuál número es cuál. Cada mitad tiene su
-  // propia key, así que la traducción decide cómo se dice sin depender de dónde cae la barra.
-  const balanceLabel = `${t('progress.push')} ${stats.balance.push}, ${t('progress.pull')} ${stats.balance.pull}`
   const maxSets = Math.max(...stats.muscles.map((m) => m.sets), 1)
   // El mapa es una sola parada del rotor: sin este resumen, un canvas de siluetas no dice nada.
   // Sin series en la ventana no hay "lo más cargado" — el cuerpo gris entero es el dato.
@@ -286,6 +237,26 @@ export default function ProgressScreen() {
     top.length === 0
       ? t('muscleMap.a11yEmpty')
       : t('muscleMap.a11yTop', { muscles: top.map((m) => t(`muscle.${m}`)).join(', ') })
+
+  const sessionsDiff = current.sessions - previous.sessions
+  const setsDiff = current.sets - previous.sets
+  const volumeDiff = current.volumeG - previous.volumeG
+  const durationDiff = avg(current) - avg(previous)
+  const volumeText = bulk(current.volumeG, unit)
+  const volumeLabel = statLabel(
+    t('progress.volume'),
+    volumeText,
+    volumeDiff,
+    bulk(Math.abs(volumeDiff), unit),
+  )
+  // "Empuje / tracción: 12 / 9" no se puede leer en voz alta: la barra del título y la del valor
+  // suenan igual (o se caen), y no queda forma de saber cuál número es cuál. Cada mitad tiene su
+  // propia key, así que la traducción decide cómo se dice sin depender de dónde cae la barra.
+  const balance = stats.balance.push + stats.balance.pull
+  const balanceLabel = t('progress.pushPullRing', {
+    pull: stats.balance.pull,
+    push: stats.balance.push,
+  })
 
   // Solo las sesiones con peso: un ejercicio de peso corporal daría una línea plana en cero.
   const points = series.filter((p) => p.e1rmG > 0)
@@ -310,154 +281,222 @@ export default function ProgressScreen() {
       : null
 
   return (
-    // Un solo FadeIn, en el contenedor y al montar: los gráficos nunca se re-animan al refrescarse.
-    <Animated.View entering={FadeIn.duration(200)} style={styles.screen}>
+    <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
-        <View style={styles.section}>
-          <SectionTitle subtitle={t('progress.lastWeek')}>{t('progress.thisWeek')}</SectionTitle>
-          <View style={styles.grid}>
-            <Stat
-              delta={current.sessions - previous.sessions}
-              deltaText={String(Math.abs(current.sessions - previous.sessions))}
-              label={t('progress.sessions')}
+        <Animated.View entering={enter(0)} style={styles.section}>
+          <SectionHeader subtitle={t('progress.lastWeek')} title={t('progress.thisWeek')} />
+          <Bento.Row>
+            <Tile
+              accessibilityLabel={plural(
+                stats.streak,
+                t('progress.streak.one', { n: stats.streak }),
+                t('progress.streak.other', { n: stats.streak }),
+              )}
+              title={t('train.streak')}
+              unit={plural(stats.streak, t('progress.weeks.one'), t('progress.weeks.other'))}
+              value={String(stats.streak)}
+            />
+            <Tile
+              accessibilityLabel={statLabel(
+                t('progress.sessions'),
+                String(current.sessions),
+                sessionsDiff,
+                String(Math.abs(sessionsDiff)),
+              )}
+              delta={delta(sessionsDiff, String(Math.abs(sessionsDiff)))}
+              title={t('progress.sessions')}
               value={String(current.sessions)}
             />
-            <Stat
-              delta={current.sets - previous.sets}
-              deltaText={String(Math.abs(current.sets - previous.sets))}
-              label={t('progress.sets')}
+          </Bento.Row>
+        </Animated.View>
+
+        <Tile
+          accessibilityLabel={volumeLabel}
+          entering={enter(1)}
+          height="md"
+          span={2}
+          title={t('progress.volume')}
+        >
+          {(size) => (
+            <View style={styles.volume}>
+              <BigNumber role="displaySmall" value={volumeText} />
+              {/* La forma de las 12 semanas; el número exacto es el de arriba. */}
+              <Sparkline
+                fill
+                height={SPARK_H}
+                label={volumeLabel}
+                values={weekly}
+                width={size.width}
+              />
+            </View>
+          )}
+        </Tile>
+
+        <Animated.View entering={enter(2)}>
+          <Bento.Row>
+            <Tile
+              accessibilityLabel={statLabel(
+                t('progress.sets'),
+                String(current.sets),
+                setsDiff,
+                String(Math.abs(setsDiff)),
+              )}
+              delta={delta(setsDiff, String(Math.abs(setsDiff)))}
+              title={t('progress.sets')}
               value={String(current.sets)}
             />
-            <Stat
-              delta={current.volumeG - previous.volumeG}
-              deltaText={bulk(Math.abs(current.volumeG - previous.volumeG), unit)}
-              label={t('progress.volume')}
-              value={bulk(current.volumeG, unit)}
-            />
-            <Stat
-              delta={avg(current) - avg(previous)}
-              deltaText={formatDuration(Math.abs(avg(current) - avg(previous)))}
-              label={t('progress.avgDuration')}
+            <Tile
+              accessibilityLabel={statLabel(
+                t('progress.avgDuration'),
+                formatDuration(avg(current)),
+                durationDiff,
+                formatDuration(Math.abs(durationDiff)),
+              )}
+              delta={delta(durationDiff, formatDuration(Math.abs(durationDiff)))}
+              title={t('progress.avgDuration')}
               value={formatDuration(avg(current))}
             />
-          </View>
-          <Card style={styles.card}>
-            {/* "0 semanas seguidas" es correcto y es la lectura más fría posible de la sección más
-                cálida: el que vuelve después de un parate ve el tonelaje, que siempre suma. */}
-            {stats.streak > 0 ? (
-              <Text role="headline">
-                {plural(
-                  stats.streak,
-                  t('progress.streak.one', { n: stats.streak }),
-                  t('progress.streak.other', { n: stats.streak }),
-                )}
-              </Text>
-            ) : null}
-            <BestRow label={t('progress.tonnage')} value={bulk(stats.tonnageG, unit)} />
-          </Card>
-          {/* I01. La puerta a Medidas vive acá y no en su propio tab: se carga cada tanto y lo que
-              se mira seguido es el peso corporal, que ya es un número de esta pantalla. */}
-          <View style={styles.group}>
-            <ListRow
-              chevron
-              label={`${t('body.title')}, ${bodyweight ? weight(bodyweight.value, unit) : t('body.empty')}`}
-              onPress={() => router.push('/body')}
-              subtitle={bodyweight ? undefined : t('body.empty')}
-              title={t('body.title')}
-              trailing={
-                bodyweight ? (
-                  <Text color="secondary" tabular>
-                    {weight(bodyweight.value, unit)}
-                  </Text>
-                ) : null
-              }
-            />
-          </View>
-        </View>
+          </Bento.Row>
+        </Animated.View>
+
+        <Tile
+          accessibilityLabel={t('progress.consistencyA11y', { days: trained })}
+          entering={enter(3)}
+          span={2}
+          title={t('progress.consistency')}
+        >
+          {() => (
+            <Heatmap days={stats.grid} label={t('progress.consistencyA11y', { days: trained })} />
+          )}
+        </Tile>
 
         {volume.length > 0 ? (
-          <View style={styles.section}>
-            <SectionTitle subtitle={t('landmarks.subtitle')}>{t('landmarks.title')}</SectionTitle>
+          <Animated.View entering={enter(4)} style={[styles.section, styles.top]}>
+            <SectionHeader subtitle={t('landmarks.subtitle')} title={t('landmarks.title')} />
             <VolumeLandmarks rows={volume} />
-          </View>
+          </Animated.View>
         ) : null}
-
-        <View style={styles.section}>
-          <SectionTitle>{t('progress.consistency')}</SectionTitle>
-          <Card>
-            <Heatmap days={stats.grid} label={t('progress.consistencyA11y', { days: trained })} />
-          </Card>
-        </View>
 
         {selected ? (
-          <View style={styles.section}>
-            <SectionTitle>{t('progress.exercise')}</SectionTitle>
-            <ScrollView
-              contentContainerStyle={styles.chips}
-              horizontal
-              showsHorizontalScrollIndicator={false}
+          <>
+            <Animated.View entering={enter(5)} style={[styles.section, styles.top]}>
+              {/* Compartir vive acá y no en el gráfico: adentro de un `Tile` (un solo elemento
+                  accesible, con los hijos ocultos) VoiceOver no alcanzaría el botón. */}
+              <SectionHeader
+                action={
+                  chart
+                    ? {
+                        onPress: () => {
+                          haptic('sheetOpen')
+                          shareExerciseChart(chart.data, chart.name, unit)
+                        },
+                        title: t('share.chart'),
+                      }
+                    : undefined
+                }
+                title={t('progress.exercise')}
+              />
+              <ScrollView
+                contentContainerStyle={styles.chips}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.bleed}
+              >
+                {pickable.map((e) => (
+                  <Chip
+                    key={e.id}
+                    label={exerciseName(e, locale)}
+                    onPress={() => setPicked(e.id)}
+                    selected={e.id === selected.id}
+                  />
+                ))}
+              </ScrollView>
+            </Animated.View>
+
+            <Tile
+              accessibilityLabel={
+                chart
+                  ? chart.label
+                  : `${exerciseName(selected, locale)}: ${t('progress.exerciseEmpty')}`
+              }
+              entering={enter(6)}
+              height={chart ? 'lg' : 'sm'}
+              span={2}
+              title={exerciseName(selected, locale)}
             >
-              {pickable.map((e) => (
-                <Chip
-                  key={e.id}
-                  label={exerciseName(e, locale)}
-                  onPress={() => setPicked(e.id)}
-                  selected={e.id === selected.id}
-                />
-              ))}
-            </ScrollView>
-            <Card style={styles.card}>
-              {chart ? (
-                <ExerciseChart
-                  data={chart.data}
-                  label={chart.label}
-                  onShare={() => shareExerciseChart(chart.data, chart.name, unit)}
-                  unit={unit}
-                />
-              ) : (
-                <Text color="secondary">{t('progress.exerciseEmpty')}</Text>
-              )}
-              {bests ? (
-                <View style={styles.divider}>
-                  <Text accessibilityRole="header" color="secondary" role="footnote">
-                    {t('progress.bests')}
-                  </Text>
-                  <BestRow
-                    label={t('pr.kind.weight')}
+              {() =>
+                chart ? (
+                  <ExerciseChart data={chart.data} label={chart.label} unit={unit} />
+                ) : (
+                  <Text color="secondary">{t('progress.exerciseEmpty')}</Text>
+                )
+              }
+            </Tile>
+
+            {bests ? (
+              <Animated.View entering={enter(7)} style={styles.section}>
+                <SectionHeader title={t('progress.bests')} />
+                <Bento.Row>
+                  <Tile
+                    title={t('pr.kind.weight')}
                     value={bests.weightG === null ? EMPTY : weight(bests.weightG, unit)}
                   />
-                  <BestRow
-                    label={t('pr.kind.e1rm')}
+                  <Tile
+                    title={t('pr.kind.e1rm')}
                     value={bests.e1rmG === null ? EMPTY : weight(bests.e1rmG, unit)}
                   />
-                  <BestRow
-                    label={t('pr.kind.volume')}
+                  <Tile
+                    title={t('pr.kind.volume')}
                     value={bests.volumeG === null ? EMPTY : bulk(bests.volumeG, unit)}
                   />
-                </View>
-              ) : null}
-            </Card>
-          </View>
+                </Bento.Row>
+              </Animated.View>
+            ) : null}
+          </>
         ) : null}
 
-        <View style={styles.section}>
-          <SectionTitle>{t('muscleMap.title')}</SectionTitle>
-          <Card>
-            <MuscleMap label={mapLabel} load={stats.load} />
-          </Card>
-        </View>
+        <Tile
+          accessibilityLabel={mapLabel}
+          entering={enter(8)}
+          height="lg"
+          span={2}
+          title={t('muscleMap.title')}
+        >
+          {() => <MuscleMap label={mapLabel} load={stats.load} />}
+        </Tile>
+
+        <Animated.View entering={enter(9)}>
+          <Bento.Row>
+            <Tile accessibilityLabel={balanceLabel} title={t('progress.pushPull')}>
+              {() => (
+                <View style={styles.center}>
+                  <Ring
+                    label={balanceLabel}
+                    progress={balance > 0 ? stats.balance.push / balance : 0}
+                    size={RING}
+                  >
+                    <Text role="label" tabular>
+                      {`${stats.balance.push} / ${stats.balance.pull}`}
+                    </Text>
+                  </Ring>
+                </View>
+              )}
+            </Tile>
+            <Tile title={t('progress.tonnage')} value={bulk(stats.tonnageG, unit)} />
+          </Bento.Row>
+        </Animated.View>
 
         {stats.muscles.length > 0 ? (
-          <View style={styles.section}>
-            <SectionTitle>{t('progress.muscles')}</SectionTitle>
-            <Card style={styles.card}>
+          <Animated.View entering={enter(10)} style={[styles.section, styles.top]}>
+            <SectionHeader title={t('progress.muscles')} />
+            <Card style={styles.card} variant="raised">
               {stats.muscles.map((m) => {
                 const name = t(`muscle.${m.muscle}`)
-                const volume = bulk(m.volumeG, unit)
+                const vol = bulk(m.volumeG, unit)
                 return (
                   <View
                     accessible
-                    accessibilityLabel={`${name}: ${m.sets} ${setsWord}, ${volume}`}
+                    accessibilityLabel={`${name}: ${m.sets} ${setsWord}, ${vol}`}
                     key={m.muscle}
                     style={styles.bar}
                   >
@@ -471,32 +510,26 @@ export default function ProgressScreen() {
                       {/* El volumen es el otro lado de G02/G03; va en terciario para que la barra y
                           el conteo de series sigan siendo lo que se lee primero. */}
                       <Text color="tertiary" role="footnote" tabular>
-                        {volume}
+                        {vol}
                       </Text>
                     </View>
-                    <View style={styles.track}>
-                      <View style={[styles.fill, { width: `${(m.sets / maxSets) * 100}%` }]} />
-                    </View>
+                    {/* Decorativa: la fila ya se anuncia con las series y el volumen en palabras. */}
+                    <ProgressBar
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                      progress={m.sets / maxSets}
+                      roundedEnd
+                    />
                   </View>
                 )
               })}
-              <View
-                accessible
-                accessibilityLabel={balanceLabel}
-                style={[styles.row, styles.divider]}
-              >
-                <Text color="secondary" style={styles.grow}>
-                  {t('progress.pushPull')}
-                </Text>
-                <Text tabular>{`${stats.balance.push} / ${stats.balance.pull}`}</Text>
-              </View>
             </Card>
-          </View>
+          </Animated.View>
         ) : null}
 
         {stats.neglected.length > 0 ? (
-          <View style={styles.section}>
-            <SectionTitle>{t('progress.neglected')}</SectionTitle>
+          <Animated.View entering={enter(11)} style={[styles.section, styles.top]}>
+            <SectionHeader title={t('progress.neglected')} />
             <View style={styles.group}>
               {stats.neglected.map((m) => {
                 const name = t(`muscle.${m.muscle}`)
@@ -515,9 +548,28 @@ export default function ProgressScreen() {
                 )
               })}
             </View>
-          </View>
+          </Animated.View>
         ) : null}
+
+        {/* I01. La puerta a Medidas vive acá y no en su propio tab: se carga cada tanto y lo que
+            se mira seguido es el peso corporal, que ya es un número de esta pantalla. */}
+        <Animated.View entering={enter(12)} style={[styles.group, styles.top]}>
+          <ListRow
+            chevron
+            label={`${t('body.title')}, ${bodyweight ? weight(bodyweight.value, unit) : t('body.empty')}`}
+            onPress={() => router.push('/body')}
+            subtitle={bodyweight ? undefined : t('body.empty')}
+            title={t('body.title')}
+            trailing={
+              bodyweight ? (
+                <Text color="secondary" tabular>
+                  {weight(bodyweight.value, unit)}
+                </Text>
+              ) : null
+            }
+          />
+        </Animated.View>
       </ScrollView>
-    </Animated.View>
+    </View>
   )
 }

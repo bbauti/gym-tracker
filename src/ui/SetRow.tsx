@@ -17,7 +17,7 @@ import { Spring, Timing } from './motion'
 import PrBadge, { prKindsLabel } from './PrBadge'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, radius, spacing } from './tokens'
+import { colors, opacity, Press, radius, spacing } from './tokens'
 
 type Props = {
   index: number
@@ -44,7 +44,6 @@ type Props = {
 export const SET_COLUMNS = { badge: 34, prevFlex: 1.4, cellFlex: 1, check: 64 } as const
 
 const ROW_HEIGHT = 56
-const TINT_ALPHA = 0.1
 const EMPTY = '–'
 
 /** Letra por tipo de serie: la normal muestra el número. Independiente del idioma a propósito. */
@@ -174,12 +173,16 @@ const styles = StyleSheet.create({
   slot: { flex: SET_COLUMNS.cellFlex },
   cell: {
     alignItems: 'center',
+    // El borde va siempre puesto y transparente: al enfocar solo cambia el color, así el número no
+    // se corre un pelo cuando aparece el hairline.
+    borderColor: 'transparent',
     borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     minHeight: 44,
     paddingHorizontal: spacing[1],
   },
-  cellFocused: { backgroundColor: colors.fill },
+  cellFocused: { backgroundColor: colors.fill, borderColor: colors.tint },
   check: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -242,7 +245,7 @@ function Cell({ index, field, set, prev, unit, locale, focused, draft, onFocus }
         accessibilityState={{ selected: focused }}
         accessibilityValue={{ text: value }}
         onPress={(e) => onFocus(field, e.nativeEvent.pageY)}
-        scale={0.94}
+        scale={Press.cell}
         style={[styles.cell, focused && styles.cellFocused]}
       >
         <Text color={tone} numberOfLines={1} role="body" tabular>
@@ -291,7 +294,7 @@ export default function SetRow({
     transform: [{ scale: 0.8 + 0.2 * fill.get() }],
   }))
   const markStyle = useAnimatedStyle(() => ({ opacity: mark.get() }))
-  const tintStyle = useAnimatedStyle(() => ({ opacity: mark.get() * TINT_ALPHA }))
+  const tintStyle = useAnimatedStyle(() => ({ opacity: mark.get() * opacity.wash }))
 
   const badge = KIND_BADGE[set.kind] ?? String(index + 1)
   // El récord entra solo cuando pasa ACÁ: una serie que ya venía con récord (abrir una sesión vieja,
@@ -382,7 +385,7 @@ export default function SetRow({
               }
               name={{ ios: 'checkmark' as SFSymbol, android: 'check' as AndroidSymbol }}
               size={16}
-              tintColor="#FFFFFF"
+              tintColor={colors.onTint}
             />
           </Animated.View>
         </View>

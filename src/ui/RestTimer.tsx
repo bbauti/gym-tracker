@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AccessibilityInfo, AppState, Platform, StyleSheet, View } from 'react-native'
 import Animated, {
   Easing,
   type EntryAnimationsValues,
   type ExitAnimationsValues,
   ReduceMotion,
-  useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withSequence,
@@ -16,11 +15,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { t } from '@/i18n'
 import { restProgress, restRemainingMs } from '@/lib/rest'
 import { formatDuration } from '@/lib/units'
+import GlassSurface from './GlassSurface'
 import { haptic } from './haptics'
 import { Spring, Timing } from './motion'
 import PressableScale from './PressableScale'
+import ProgressBar from './ProgressBar'
 import Text from './Text'
-import { colors, MIN_TARGET, radius, spacing } from './tokens'
+import { MIN_TARGET, radius, spacing } from './tokens'
 
 type Props = {
   /** Cuándo arrancó el descanso (MAX(completed_at) de la sesión): la barra es remaining / total. */
@@ -33,7 +34,8 @@ type Props = {
 }
 
 const ADJUST_MS = 15_000
-const TRACK_HEIGHT = 4
+/** Los últimos segundos que se avisan con un tic (§12.6). */
+const TICK_FROM = 3
 /** Lo que tarda `Spring.snappy` en asentar (ζ=1, ~300 ms según ui/motion.ts). Ver `retarget`. */
 const SNAPPY_MS = 300
 
@@ -76,51 +78,17 @@ export function useNow(anchor: number, active = true): number {
   return now
 }
 
-/** Entra desde su propio alto con Spring.sheet: nada aparece de la nada (§7.1). */
-function enter(values: EntryAnimationsValues) {
-  'worklet'
-  return {
-    animations: {
-      opacity: withTiming(1, Timing.base),
-      transform: [{ translateY: withSpring(0, Spring.sheet) }],
-    },
-    initialValues: { opacity: 0, transform: [{ translateY: values.targetHeight }] },
-  }
-}
-
-/** Sale por donde entró, en 0.7 × la entrada (§7.2, y §7.5 rechaza misma duración enter/exit). */
-function exit(values: ExitAnimationsValues) {
-  'worklet'
-  return {
-    animations: {
-      opacity: withTiming(0, Timing.fast),
-      transform: [{ translateY: withTiming(values.currentHeight, Timing.fast) }],
-    },
-    initialValues: { opacity: 1, transform: [{ translateY: 0 }] },
-  }
-}
-
 const styles = StyleSheet.create({
-  bar: {
-    backgroundColor: colors.secondaryGroupedBackground,
-    borderTopColor: colors.separator,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  // La cápsula flota: el margen la despega de los bordes y del numpad que aparece abajo (§12.3).
+  wrap: { marginHorizontal: spacing[3], marginTop: spacing[3] },
+  capsule: {
+    borderRadius: radius.xl,
     gap: spacing[3],
     paddingHorizontal: spacing[4],
-    paddingTop: spacing[3],
+    paddingVertical: spacing[3],
   },
   head: { alignItems: 'baseline', flexDirection: 'row', gap: spacing[2] },
   title: { flex: 1 },
-  track: {
-    backgroundColor: colors.fill,
-    borderRadius: TRACK_HEIGHT / 2,
-    height: TRACK_HEIGHT,
-    overflow: 'hidden',
-  },
-  // scaleX y no width: el ancho animado pasa por layout en cada frame (§7.5).
-  fill: { backgroundColor: colors.tint, height: '100%', transformOrigin: 'left', width: '100%' },
   // `flexWrap`: con Dynamic Type AX los tres labels no entran en una línea de 393 pt y sin esto
   // el spacer colapsa y los controles se cortan. El spacer tiene flex-basis 0, así que no decide
   // el corte de línea: envuelve "Saltar" solo.
@@ -160,6 +128,44 @@ export default function RestTimer({ startedAt, endsAt, onAdjust, onSkip, onDone 
   const remaining = restRemainingMs(endsAt, now)
   const seconds = Math.ceil(remaining / 1000)
   const label = formatDuration(seconds * 1000)
+
+  // `targetHeight`/`currentHeight` son el border-box: NO incluyen los márgenes de la cápsula. Sin
+  // sumarlos la barra arrancaría su entrada ya adentro de la pantalla (~46 pt en un 16 Pro) en vez
+  // de abajo del todo, y §7.1 pide que entre desde su propio alto — nada aparece de la nada.
+  const outsideGap = insets.bottom + spacing[3] * 2
+
+  /** Entra desde su propio alto con Spring.sheet: nada aparece de la nada (§7.1). */
+  const enter = useCallback(
+    (values: EntryAnimationsValues) => {
+      'worklet'
+      return {
+        animations: {
+          opacity: withTiming(1, Timing.base),
+          transform: [{ translateY: withSpring(0, Spring.sheet) }],
+        },
+        initialValues: {
+          opacity: 0,
+          transform: [{ translateY: values.targetHeight + outsideGap }],
+        },
+      }
+    },
+    [outsideGap],
+  )
+
+  /** Sale por donde entró, en 0.7 × la entrada (§7.2, y §7.5 rechaza misma duración enter/exit). */
+  const exit = useCallback(
+    (values: ExitAnimationsValues) => {
+      'worklet'
+      return {
+        animations: {
+          opacity: withTiming(0, Timing.fast),
+          transform: [{ translateY: withTiming(values.currentHeight + outsideGap, Timing.fast) }],
+        },
+        initialValues: { opacity: 1, transform: [{ translateY: 0 }] },
+      }
+    },
+    [outsideGap],
+  )
 
   useEffect(() => {
     // `reduceMotion` explícito: por default Reanimated manda cualquier `withTiming` al target en el
@@ -202,6 +208,16 @@ export default function RestTimer({ startedAt, endsAt, onAdjust, onSkip, onDone 
     return () => sub.remove()
   }, [startedAt, endsAt, progress, reduced])
 
+  // 3-2-1 sin mirar la pantalla. Sale del mismo tic de 1 Hz que mueve el label (`useNow`): ningún
+  // timer nuevo, y el gate por evento de `haptic` se come cualquier render de más. `ticked` arranca
+  // con el segundo del montaje: volver a la sesión con 2 s de descanso en curso no es una cuenta
+  // regresiva nueva, así que solo suena cuando el número CAMBIA.
+  const ticked = useRef(seconds)
+  useEffect(() => {
+    if (seconds !== ticked.current && seconds >= 1 && seconds <= TICK_FROM) haptic('tick')
+    ticked.current = seconds
+  }, [seconds])
+
   useEffect(() => {
     if (remaining > 0 || fired.current) return
     // El háptico en el mismo bloque que el aviso; el colapso lo dispara el padre al limpiar la fila.
@@ -223,62 +239,73 @@ export default function RestTimer({ startedAt, endsAt, onAdjust, onSkip, onDone 
     )
   }, [startedAt, seconds, label])
 
-  const fill = useAnimatedStyle(() => ({ transform: [{ scaleX: progress.get() }] }))
-
   const adjust = (deltaMs: number) => {
     haptic('selection')
     onAdjust(deltaMs)
+  }
+
+  const skip = () => {
+    haptic('selection')
+    onSkip()
   }
 
   return (
     <Animated.View
       entering={enter}
       exiting={exit}
-      style={[styles.bar, { paddingBottom: insets.bottom + spacing[3] }]}
+      style={[styles.wrap, { marginBottom: insets.bottom + spacing[3] }]}
     >
-      <View style={styles.head}>
-        <Text color="secondary" numberOfLines={1} role="footnote" style={styles.title}>
-          {t('rest.title')}
-        </Text>
-        <Text
-          accessibilityLabel={t('rest.remaining', { time: label })}
-          // Solo en los minutos redondos: a 1 Hz el lector de pantalla no dejaría hablar a nadie.
-          accessibilityLiveRegion={seconds % 60 === 0 ? 'polite' : 'none'}
-          role="title"
-          tabular
-        >
-          {label}
-        </Text>
-      </View>
-      <View style={styles.track}>
-        <Animated.View style={[styles.fill, fill]} />
-      </View>
-      <View style={styles.actions}>
-        <PressableScale
-          accessibilityLabel={t('rest.minus15')}
-          onPress={() => adjust(-ADJUST_MS)}
-          style={styles.action}
-        >
-          <Text color="tint" role="headline" tabular>
-            {t('rest.minus15')}
+      <GlassSurface style={styles.capsule}>
+        <View style={styles.head}>
+          <Text color="secondary" numberOfLines={1} role="footnote" style={styles.title}>
+            {t('rest.title')}
           </Text>
-        </PressableScale>
-        <PressableScale
-          accessibilityLabel={t('rest.plus15')}
-          onPress={() => adjust(ADJUST_MS)}
-          style={styles.action}
-        >
-          <Text color="tint" role="headline" tabular>
-            {t('rest.plus15')}
+          <Text
+            accessibilityLabel={t('rest.remaining', { time: label })}
+            // Solo en los minutos redondos: a 1 Hz el lector de pantalla no dejaría hablar a nadie.
+            accessibilityLiveRegion={seconds % 60 === 0 ? 'polite' : 'none'}
+            role="titleEmphasized"
+            tabular
+          >
+            {label}
           </Text>
-        </PressableScale>
-        <View style={styles.spacer} />
-        <PressableScale accessibilityLabel={t('rest.skip')} onPress={onSkip} style={styles.action}>
-          <Text color="secondary" role="headline">
-            {t('rest.skip')}
-          </Text>
-        </PressableScale>
-      </View>
+        </View>
+        {/* La fracción la cronometra este componente contra el reloj: la barra la lee tal cual.
+            Fuera del árbol accesible: sin valor que anunciar (cambia por frame), el número de arriba
+            es el que se lee. */}
+        <ProgressBar
+          accessibilityElementsHidden
+          height={6}
+          importantForAccessibility="no-hide-descendants"
+          progress={progress}
+        />
+        <View style={styles.actions}>
+          <PressableScale
+            accessibilityLabel={t('rest.minus15')}
+            onPress={() => adjust(-ADJUST_MS)}
+            style={styles.action}
+          >
+            <Text color="tint" role="headline" tabular>
+              {t('rest.minus15')}
+            </Text>
+          </PressableScale>
+          <PressableScale
+            accessibilityLabel={t('rest.plus15')}
+            onPress={() => adjust(ADJUST_MS)}
+            style={styles.action}
+          >
+            <Text color="tint" role="headline" tabular>
+              {t('rest.plus15')}
+            </Text>
+          </PressableScale>
+          <View style={styles.spacer} />
+          <PressableScale accessibilityLabel={t('rest.skip')} onPress={skip} style={styles.action}>
+            <Text color="secondary" role="headline">
+              {t('rest.skip')}
+            </Text>
+          </PressableScale>
+        </View>
+      </GlassSurface>
     </Animated.View>
   )
 }

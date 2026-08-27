@@ -8,6 +8,9 @@ export default {
   'train.thisWeek': 'Esta semana',
   'train.streak': 'Racha',
   'train.setsLast7': 'Series, 7 días',
+  'train.setsLast7A11y': '{n} series en los últimos 7 días',
+  'train.sessions.one': 'sesión',
+  'train.sessions.other': 'sesiones',
 
   'history.empty.title': 'Todavía no hay entrenamientos',
   'history.empty.description': 'Acá van a aparecer las sesiones que termines.',
@@ -23,6 +26,8 @@ export default {
   'progress.tonnage': 'Tonelaje total',
   'progress.streak.one': '{n} semana seguida',
   'progress.streak.other': '{n} semanas seguidas',
+  'progress.weeks.one': 'semana',
+  'progress.weeks.other': 'semanas',
   'progress.consistency': 'Constancia',
   'progress.consistencyA11y': '{days} días entrenados en las últimas 12 semanas',
   'progress.exercise': 'Progreso por ejercicio',
@@ -66,6 +71,7 @@ export default {
   'progression.reason.deload': 'semana de deload',
   'progression.reason.repeat': 'mismo peso',
 
+  'deload.badge': 'Sugerencia',
   'deload.title': '¿Toca una semana de deload?',
   'deload.reasonStall': 'La mitad de lo que venís entrenando está estancado.',
   'deload.reasonRpe': 'Venís entrenando muy cerca del fallo.',
@@ -171,6 +177,9 @@ export default {
 
   'a11y.moveUp': 'Mover arriba',
   'a11y.moveDown': 'Mover abajo',
+  // Estado de un switch: la fila lo dice en palabras porque el rol de la fila es 'button'.
+  'a11y.on': 'Activado',
+  'a11y.off': 'Desactivado',
 
   'session.untitled': 'Entrenamiento',
   'session.start': 'Empezar entrenamiento',
@@ -423,6 +432,7 @@ export default {
   'gyms.title': 'Gimnasios',
   'gyms.new': 'Nuevo gimnasio',
   'gyms.empty': 'Todavía no cargaste ningún gimnasio.',
+  'gyms.active': 'Activo',
   'gyms.setActive': 'Usar este gimnasio',
   'gyms.setActiveHint': 'Si ya está activo, volver a tocarlo lo apaga.',
   'gyms.deleted': 'Gimnasio borrado',

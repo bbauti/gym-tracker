@@ -27,7 +27,8 @@ const ZONE_COLOR: Record<Zone, ColorValue> = {
 }
 
 const styles = StyleSheet.create({
-  card: { gap: spacing[2] },
+  // `radius.xl` y `raised`: en Progreso la banda va en la misma columna que los tiles del bento.
+  card: { borderRadius: radius.xl, gap: spacing[2] },
   // `borderRadius` para el wash del press: la fila no tiene fondo propio, el radio es solo suyo.
   row: {
     borderRadius: radius.sm,
@@ -96,7 +97,7 @@ export default function VolumeLandmarks({ rows }: { rows: VolumeRow[] }) {
       b.sets - a.sets || t(`muscle.${a.muscle}`).localeCompare(t(`muscle.${b.muscle}`), locale),
   )
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} variant="raised">
       {sorted.map((r) => (
         <Row key={r.muscle} landmark={r.landmark} muscle={r.muscle} sets={r.sets} />
       ))}

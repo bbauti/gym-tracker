@@ -22,6 +22,11 @@ type Props = {
   sf?: string
   /** Material Symbol equivalente; sin esto SymbolView no dibuja nada en Android. */
   md?: string
+  /**
+   * `false` cuando el golpe lo dispara la pantalla (`sessionStart`, `success`): el `buttonPrimary`
+   * de acá sale en el mismo tick y el portón de 50 ms de `haptic()` se comería el otro.
+   */
+  haptics?: boolean
 }
 
 const styles = StyleSheet.create({
@@ -55,6 +60,7 @@ export default function Button({
   disabled,
   sf,
   md,
+  haptics = true,
 }: Props) {
   const primary = variant === 'filled' || variant === 'hero'
   const accent = destructive ? colors.destructive : colors.tint
@@ -66,7 +72,7 @@ export default function Button({
       disabled={disabled}
       onPress={() => {
         // Solo el primario (§12.3): un `tinted`/`plain` es la acción de al lado y no se gana un golpe.
-        if (primary) haptic('buttonPrimary')
+        if (primary && haptics) haptic('buttonPrimary')
         onPress()
       }}
       style={[

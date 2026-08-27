@@ -2,7 +2,7 @@ import { getDocumentAsync } from 'expo-document-picker'
 import { File } from 'expo-file-system'
 import { router } from 'expo-router'
 import { useRef, useState } from 'react'
-import { StyleSheet, TextInput, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { type Exercise, listExercises, normalizeName } from '@/db/queries/exercises'
 import { importRoutine } from '@/db/queries/routines'
@@ -11,11 +11,12 @@ import { useQuery } from '@/db/useQuery'
 import { plural, t } from '@/i18n'
 import { parseRoutineDraft, type RoutineDraft } from '@/lib/routineText'
 import Button from '@/ui/Button'
+import Input from '@/ui/Input'
 import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
-import PressableScale from '@/ui/PressableScale'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, radius, spacing } from '@/ui/tokens'
+import { spacing } from '@/ui/tokens'
 
 const CATALOGUE_TABLES = ['exercise', 'settings']
 /** Lo que acepta el picker; el formato real lo decide el parser, no la extensión. */
@@ -23,20 +24,7 @@ const FILE_TYPES = ['text/plain', 'text/csv', 'text/comma-separated-values', 'ap
 
 const styles = StyleSheet.create({
   // Detents fijos ([0.75, 1]): acá el flex: 1 sí va — la hoja no mide su contenido.
-  sheet: { backgroundColor: colors.background, flex: 1, gap: spacing[3], padding: spacing[4] },
-  head: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  cancel: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
-  input: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.md,
-    color: colors.label,
-    flex: 1,
-    fontSize: 17,
-    lineHeight: 22,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    textAlignVertical: 'top',
-  },
+  fill: { flex: 1 },
   // Alto reservado: el resumen aparece y desaparece con cada tecla y no puede mover los botones.
   footnote: { minHeight: 18 },
   actions: { flexDirection: 'row', gap: spacing[3] },
@@ -139,48 +127,35 @@ export default function RoutineImportScreen() {
       automaticOffset
       behavior="padding"
       enabled={KAV_ENABLED}
-      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
+      style={[sheetStyles.sheet, styles.fill, { paddingBottom: bottom + spacing[4] }]}
     >
-      <View style={styles.head}>
-        <Text accessibilityRole="header" role="headline">
-          {t('import.title')}
+      <SheetHeader onCancel={() => router.back()} title={t('import.title')} />
+
+      <View style={[sheetStyles.content, styles.fill]}>
+        <Input
+          accessibilityLabel={t('import.title')}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          multiline
+          onChangeText={setText}
+          placeholder={t('import.placeholder')}
+          style={styles.fill}
+          value={text}
+        />
+
+        <Text color={preview ? 'secondary' : 'destructive'} role="footnote" style={styles.footnote}>
+          {preview ? previewLabel(preview) : text.trim() ? t('import.invalid') : ''}
         </Text>
-        <PressableScale
-          accessibilityLabel={t('common.cancel')}
-          onPress={() => router.back()}
-          style={styles.cancel}
-        >
-          <Text color="tint" role="headline">
-            {t('common.cancel')}
-          </Text>
-        </PressableScale>
-      </View>
 
-      <TextInput
-        accessibilityLabel={t('import.title')}
-        autoCapitalize="none"
-        autoCorrect={false}
-        autoFocus
-        maxFontSizeMultiplier={1.6}
-        multiline
-        onChangeText={setText}
-        placeholder={t('import.placeholder')}
-        placeholderTextColor={colors.tertiaryLabel}
-        style={styles.input}
-        value={text}
-      />
-
-      <Text color={preview ? 'secondary' : 'destructive'} role="footnote" style={styles.footnote}>
-        {preview ? previewLabel(preview) : text.trim() ? t('import.invalid') : ''}
-      </Text>
-
-      <View style={styles.actions}>
-        {/* PressableScale le pasa el `style` a su View de adentro: el flex va en el envoltorio. */}
-        <View style={styles.grow}>
-          <Button onPress={pickFile} title={t('import.fromFile')} variant="tinted" />
-        </View>
-        <View style={styles.grow}>
-          <Button disabled={!draft} onPress={run} title={t('import.action')} />
+        <View style={styles.actions}>
+          {/* PressableScale le pasa el `style` a su View de adentro: el flex va en el envoltorio. */}
+          <View style={styles.grow}>
+            <Button onPress={pickFile} title={t('import.fromFile')} variant="tinted" />
+          </View>
+          <View style={styles.grow}>
+            <Button disabled={!draft} onPress={run} title={t('import.action')} />
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>

@@ -3,12 +3,13 @@ import { StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { locale, t } from '@/i18n'
 import type { DeloadState } from '@/lib/progression'
+import Badge from './Badge'
 import Button from './Button'
 import Card from './Card'
 import { Exit, RowLayout, useEnterFade } from './motion'
 import PressableScale from './PressableScale'
 import Text from './Text'
-import { colors, MIN_TARGET, radius, spacing } from './tokens'
+import { MIN_TARGET, spacing } from './tokens'
 
 type Props = {
   state: DeloadState
@@ -27,20 +28,15 @@ const dateFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'lon
 
 const styles = StyleSheet.create({
   card: { gap: spacing[2] },
-  actions: { flexDirection: 'row', gap: spacing[2], paddingTop: spacing[1] },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: spacing[2], paddingTop: spacing[1] },
   action: { flex: 1 },
+  // Sin fondo propio: el color lo pone el Badge, que es la pastilla del sistema (§12.4).
   banner: {
     alignItems: 'center',
-    borderRadius: radius.md,
     flexDirection: 'row',
     gap: spacing[2],
-    overflow: 'hidden',
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1],
+    justifyContent: 'space-between',
   },
-  // `colors.tint` es un PlatformColor: no se le puede poner alpha, así que el lavado va aparte
-  // (mismo truco que la variante `tinted` de ui/Button).
-  wash: { opacity: 0.12 },
   bannerLabel: { flex: 1 },
   end: {
     alignItems: 'center',
@@ -70,19 +66,18 @@ export default function DeloadCard({ state, onStart, onDismiss, onEnd, entering 
         // La card se va sin `exiting` (no retiene el alto) y el cartel entra sobre el hueco que
         // RowLayout está cerrando: si no, sería lo único del cambio que no anima (§7.1).
         <Animated.View entering={bannerFade('banner')} style={styles.banner}>
-          <View
-            pointerEvents="none"
-            style={[StyleSheet.absoluteFill, styles.wash, { backgroundColor: colors.tint }]}
-          />
-          <Text color="tint" role="footnote" style={styles.bannerLabel}>
-            {until === null
-              ? t('deload.activeTitle')
-              : `${t('deload.activeTitle')} · ${t('deload.until', {
-                  date: dateFormat.format(until),
-                })}`}
-          </Text>
+          {/* El Badge se ajusta a su texto: envuelto, se lleva el alto de la fila sin estirarse. */}
+          <View>
+            <Badge label={t('deload.activeTitle')} size="md" tone="warning" />
+          </View>
+          {until === null ? null : (
+            <Text color="secondary" numberOfLines={1} role="footnote" style={styles.bannerLabel}>
+              {t('deload.until', { date: dateFormat.format(until) })}
+            </Text>
+          )}
           <PressableScale
             accessibilityLabel={`${t('deload.end')}, ${t('deload.activeTitle')}`}
+            accessibilityRole="button"
             onPress={onEnd}
             style={styles.end}
           >
@@ -92,7 +87,9 @@ export default function DeloadCard({ state, onStart, onDismiss, onEnd, entering 
           </PressableScale>
         </Animated.View>
       ) : (
-        <Card style={styles.card}>
+        <Card style={styles.card} variant="raised">
+          {/* La pastilla dice de entrada que esto se puede ignorar: la card no manda, propone. */}
+          <Badge label={t('deload.badge')} tone="warning" />
           <Text accessibilityRole="header" role="headline">
             {t('deload.title')}
           </Text>
@@ -100,19 +97,19 @@ export default function DeloadCard({ state, onStart, onDismiss, onEnd, entering 
             {t(state.reason === 'stall' ? 'deload.reasonStall' : 'deload.reasonRpe')}
           </Text>
           <View style={styles.actions}>
+            {/* `tinted` y no `hero`: la card es un consejo y el degradado ya lo tiene el CTA del
+                pie (§12.3, uno solo a la vista). Además deja sonar el Success de la pantalla. */}
             <View style={styles.action}>
               <Button onPress={onStart} title={t('deload.start')} variant="tinted" />
             </View>
-            <View style={styles.action}>
-              {/* "Ahora no" solo no dice a qué: el título está arriba, pero el lector puede caer
-                  directo en el botón (rotor de controles) y ahí no hay contexto. */}
-              <Button
-                accessibilityLabel={`${t('deload.dismiss')}, ${t('deload.title')}`}
-                onPress={onDismiss}
-                title={t('deload.dismiss')}
-                variant="plain"
-              />
-            </View>
+            {/* "Ahora no" solo no dice a qué: el título está arriba, pero el lector puede caer
+                directo en el botón (rotor de controles) y ahí no hay contexto. */}
+            <Button
+              accessibilityLabel={`${t('deload.dismiss')}, ${t('deload.title')}`}
+              onPress={onDismiss}
+              title={t('deload.dismiss')}
+              variant="plain"
+            />
           </View>
         </Card>
       )}

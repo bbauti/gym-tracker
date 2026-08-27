@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import {
   type AccessibilityActionEvent,
   type AccessibilityActionInfo,
+  type AccessibilityRole,
+  type AccessibilityState,
   StyleSheet,
   View,
 } from 'react-native'
@@ -23,6 +25,13 @@ type Props = {
   /** Acciones del rotor (reordenar): el foco cae en la fila entera, así que se cuelgan de ella. */
   accessibilityActions?: AccessibilityActionInfo[]
   onAccessibilityAction?: (event: AccessibilityActionEvent) => void
+  /** Cuando la fila ES otro control (un switch, p. ej.): sin esto se anuncia como botón. */
+  accessibilityRole?: AccessibilityRole
+  /**
+   * El valor del control (`checked`) y si está apagado. Va explícito: una fila sin `onPress` es
+   * informativa, no deshabilitada, y anunciarla "atenuada" dice lo contrario de lo que pasa.
+   */
+  accessibilityState?: AccessibilityState
 }
 
 const styles = StyleSheet.create({
@@ -79,13 +88,7 @@ export default function ListRow({
 
   if (!onPress)
     return (
-      <View
-        {...a11y}
-        accessible
-        accessibilityLabel={a11yLabel}
-        accessibilityState={{ disabled: true }}
-        style={styles.container}
-      >
+      <View {...a11y} accessible accessibilityLabel={a11yLabel} style={styles.container}>
         {content}
       </View>
     )

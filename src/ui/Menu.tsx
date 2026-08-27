@@ -2,6 +2,7 @@ import { type MenuAction, MenuView } from '@expo/ui/community/menu'
 import type { ReactNode } from 'react'
 import { ActionSheetIOS, Alert, Platform } from 'react-native'
 import { t } from '@/i18n'
+import { haptic } from './haptics'
 
 export type MenuItem = {
   key: string
@@ -10,6 +11,11 @@ export type MenuItem = {
   sf?: string
   /** Material Symbol equivalente. Ver el comentario de `toAction`: hoy no se dibuja. */
   md?: string
+  /**
+   * Sin tic: o el háptico lo dispara quien maneja la acción, o el ítem es un verbo que abre otra
+   * pantalla y ahí no va ninguno (§7.4: nunca en navegación).
+   */
+  skipTick?: boolean
 }
 
 type Props = { items: MenuItem[]; onSelect: (key: string) => void; children: ReactNode }
@@ -18,6 +24,15 @@ type Props = { items: MenuItem[]; onSelect: (key: string) => void; children: Rea
 // dibuja el ícono de una acción en Android si le pasás un ImageSourcePropType (un require de un
 // vector .xml), y el proyecto no tiene assets. Techo: en Android el menú va sin íconos.
 // Upgrade: assets/menu/*.xml + un map de nombre -> require.
+/**
+ * El tic de "elegí una opción" (§12.6). En una acción destructiva (o marcada `skipTick`) NO va: el
+ * gate global de 50 ms es uno solo para todos los eventos, así que el tic se comería el háptico que
+ * dispara el handler en el mismo tick.
+ */
+const pick = (item: MenuItem | undefined): void => {
+  if (item && !item.destructive && !item.skipTick) haptic('pickerChange')
+}
+
 const toAction = (i: MenuItem): MenuAction => ({
   id: i.key,
   title: i.label,
@@ -31,7 +46,15 @@ const toAction = (i: MenuItem): MenuAction => ({
  */
 export default function Menu({ items, onSelect, children }: Props) {
   return (
-    <MenuView actions={items.map(toAction)} onPressAction={(e) => onSelect(e.nativeEvent.event)}>
+    <MenuView
+      actions={items.map(toAction)}
+      onPressAction={(e) => {
+        // El menú nativo ya se cerró: el tic acompaña al cambio, no a la apertura.
+        const key = e.nativeEvent.event
+        pick(items.find((i) => i.key === key))
+        onSelect(key)
+      }}
+    >
       {children}
     </MenuView>
   )
@@ -59,7 +82,9 @@ export function showMenu(o: {
       },
       (index) => {
         const item = o.items[index]
-        if (item) o.onSelect(item.key)
+        if (!item) return
+        pick(item)
+        o.onSelect(item.key)
       },
     )
     return
@@ -70,7 +95,10 @@ export function showMenu(o: {
   // Upgrade: una ruta formSheet 'set-options' — las rutas las registra app/_layout.tsx (otro slice).
   Alert.alert(o.title ?? '', undefined, [
     ...o.items.slice(0, 2).map((i) => ({
-      onPress: () => o.onSelect(i.key),
+      onPress: () => {
+        pick(i)
+        o.onSelect(i.key)
+      },
       style: i.destructive ? ('destructive' as const) : undefined,
       text: i.label,
     })),

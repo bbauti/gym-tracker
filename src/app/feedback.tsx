@@ -7,9 +7,9 @@ import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
 import Chip from '@/ui/Chip'
 import { useSheetBottomInset } from '@/ui/keyboard'
-import PressableScale from '@/ui/PressableScale'
-import Text from '@/ui/Text'
-import { colors, spacing } from '@/ui/tokens'
+import SectionHeader from '@/ui/SectionHeader'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
+import { spacing } from '@/ui/tokens'
 
 type Option<V extends number> = { label: string; value: V }
 
@@ -31,15 +31,6 @@ const PAIN: Option<NonNullable<Feedback['pain']>>[] = [
 ]
 
 const styles = StyleSheet.create({
-  // Sin flex: 1 — `fitToContents` mide el contenido y un hijo elástico mediría cero (hoja de 0 pt).
-  sheet: { backgroundColor: colors.background, gap: spacing[3], padding: spacing[4] },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: spacing[2],
-  },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
   row: { gap: spacing[2] },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
 })
@@ -57,9 +48,7 @@ function Row<V extends number>({
 }) {
   return (
     <View style={styles.row}>
-      <Text accessibilityRole="header" color="secondary" role="footnote">
-        {label}
-      </Text>
+      <SectionHeader title={label} />
       <View style={styles.chips}>
         {options.map((o) => (
           <Chip
@@ -106,40 +95,29 @@ export default function FeedbackScreen() {
   }
 
   return (
-    <View style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}>
-      <View style={styles.header}>
-        <Text accessibilityRole="header" role="headline">
-          {t('feedback.title')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('common.done')}
-          onPress={() => router.back()}
-          style={styles.done}
-        >
-          <Text color="tint" role="headline">
-            {t('common.done')}
-          </Text>
-        </PressableScale>
-      </View>
+    <View style={[sheetStyles.sheet, { paddingBottom: bottom + spacing[4] }]}>
+      <SheetHeader onDone={() => router.back()} title={t('feedback.title')} />
 
-      <Row
-        label={t('feedback.pump')}
-        onPick={(pump) => save({ ...feedback, pump })}
-        options={PUMP}
-        value={feedback?.pump}
-      />
-      <Row
-        label={t('feedback.difficulty')}
-        onPick={(difficulty) => save({ ...feedback, difficulty })}
-        options={DIFFICULTY}
-        value={feedback?.difficulty}
-      />
-      <Row
-        label={t('feedback.pain')}
-        onPick={(pain) => save({ ...feedback, pain })}
-        options={PAIN}
-        value={feedback?.pain}
-      />
+      <View style={sheetStyles.content}>
+        <Row
+          label={t('feedback.pump')}
+          onPick={(pump) => save({ ...feedback, pump })}
+          options={PUMP}
+          value={feedback?.pump}
+        />
+        <Row
+          label={t('feedback.difficulty')}
+          onPick={(difficulty) => save({ ...feedback, difficulty })}
+          options={DIFFICULTY}
+          value={feedback?.difficulty}
+        />
+        <Row
+          label={t('feedback.pain')}
+          onPick={(pain) => save({ ...feedback, pain })}
+          options={PAIN}
+          value={feedback?.pain}
+        />
+      </View>
     </View>
   )
 }

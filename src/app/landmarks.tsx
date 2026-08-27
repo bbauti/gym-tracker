@@ -1,33 +1,21 @@
 import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
-import { StyleSheet, View } from 'react-native'
+import { View } from 'react-native'
 import { landmarks, setLandmark } from '@/db/queries/progression'
 import { MUSCLES, type Muscle } from '@/db/schema'
 import { t } from '@/i18n'
 import type { Landmark } from '@/lib/progression'
 import { useSheetBottomInset } from '@/ui/keyboard'
-import PressableScale from '@/ui/PressableScale'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Stepper from '@/ui/Stepper'
 import Text from '@/ui/Text'
-import { colors, spacing } from '@/ui/tokens'
+import { spacing } from '@/ui/tokens'
 
 /** Nadie hace 40 series de un músculo en una semana; más arriba el ± deja de ser una herramienta. */
 const MAX_SETS = 40
 
 /** Las tres siglas, escritas una sola vez arriba: en la fila no entran sin recortarse. */
 const LEGEND = [t('landmarks.mevLong'), t('landmarks.mavLong'), t('landmarks.mrvLong')].join(' · ')
-
-// Sin flex: 1 — `fitToContents` mide el contenido y un hijo elástico mediría cero (hoja de 0 pt).
-const styles = StyleSheet.create({
-  sheet: { backgroundColor: colors.background, gap: spacing[2], padding: spacing[4] },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: spacing[2],
-  },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
-})
 
 const isMuscle = (v: string | undefined): v is Muscle => MUSCLES.includes(v as Muscle)
 
@@ -62,55 +50,44 @@ export default function LandmarksScreen() {
   }
 
   return (
-    <View style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}>
-      <View style={styles.header}>
-        <Text accessibilityRole="header" role="headline">
-          {t(`muscle.${muscle}`)}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('common.done')}
-          onPress={() => router.back()}
-          style={styles.done}
+    <View style={[sheetStyles.sheet, { paddingBottom: bottom + spacing[4] }]}>
+      <SheetHeader onDone={() => router.back()} title={t(`muscle.${muscle}`)} />
+      <View style={sheetStyles.content}>
+        {/* Las formas largas ya son el accessibilityLabel de cada ±: dejarla visible la lee dos veces. */}
+        <Text
+          accessibilityElementsHidden
+          color="secondary"
+          importantForAccessibility="no-hide-descendants"
+          role="footnote"
         >
-          <Text color="tint" role="headline">
-            {t('common.done')}
-          </Text>
-        </PressableScale>
-      </View>
-      {/* Las formas largas ya son el accessibilityLabel de cada ±: dejarla visible la lee dos veces. */}
-      <Text
-        accessibilityElementsHidden
-        color="secondary"
-        importantForAccessibility="no-hide-descendants"
-        role="footnote"
-      >
-        {LEGEND}
-      </Text>
+          {LEGEND}
+        </Text>
 
-      <Stepper
-        accessibilityLabel={t('landmarks.mevLong')}
-        label={t('landmarks.mev')}
-        max={MAX_SETS}
-        min={0}
-        onChange={changeMev}
-        value={lm.mev}
-      />
-      <Stepper
-        accessibilityLabel={t('landmarks.mavLong')}
-        label={t('landmarks.mav')}
-        max={MAX_SETS}
-        min={0}
-        onChange={changeMav}
-        value={lm.mav}
-      />
-      <Stepper
-        accessibilityLabel={t('landmarks.mrvLong')}
-        label={t('landmarks.mrv')}
-        max={MAX_SETS}
-        min={0}
-        onChange={changeMrv}
-        value={lm.mrv}
-      />
+        <Stepper
+          accessibilityLabel={t('landmarks.mevLong')}
+          label={t('landmarks.mev')}
+          max={MAX_SETS}
+          min={0}
+          onChange={changeMev}
+          value={lm.mev}
+        />
+        <Stepper
+          accessibilityLabel={t('landmarks.mavLong')}
+          label={t('landmarks.mav')}
+          max={MAX_SETS}
+          min={0}
+          onChange={changeMav}
+          value={lm.mav}
+        />
+        <Stepper
+          accessibilityLabel={t('landmarks.mrvLong')}
+          label={t('landmarks.mrv')}
+          max={MAX_SETS}
+          min={0}
+          onChange={changeMrv}
+          value={lm.mrv}
+        />
+      </View>
     </View>
   )
 }

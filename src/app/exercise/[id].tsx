@@ -1,7 +1,7 @@
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { type ReactNode, useState } from 'react'
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { db } from '@/db/client'
 import { exerciseHistory, exerciseName, getExercise, updateExercise } from '@/db/queries/exercises'
@@ -21,23 +21,29 @@ import {
   type Unit,
   unitToG,
 } from '@/lib/units'
+import Badge from '@/ui/Badge'
+import Bento from '@/ui/Bento'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
+import Input from '@/ui/Input'
+import ListRow from '@/ui/ListRow'
 import Menu from '@/ui/Menu'
 import { prKindsLabel } from '@/ui/PrBadge'
+import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
+import Tile from '@/ui/Tile'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
   content: { padding: spacing[4], gap: spacing[5] },
   meta: { paddingHorizontal: spacing[2] },
-  sectionTitle: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    paddingHorizontal: spacing[2],
-    paddingBottom: spacing[2],
-  },
+  // El encabezado se alinea con el texto de las filas, no con el borde de la card.
+  sectionHeader: { paddingHorizontal: spacing[2] },
+  section: { gap: spacing[2] },
+  // Un bloque del bento respira más que un encabezado sobre su lista.
+  block: { gap: spacing[3] },
   // El fondo del grupo pinta los separadores: un gap de hairline entre filas opacas.
   group: {
     borderRadius: radius.md,
@@ -45,6 +51,8 @@ const styles = StyleSheet.create({
     gap: StyleSheet.hairlineWidth,
     backgroundColor: colors.separator,
   },
+  // `ui/ListRow` trae su propio fondo y su propio separador: acá solo se recorta el bloque.
+  list: { borderRadius: radius.md, overflow: 'hidden' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -61,24 +69,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     backgroundColor: colors.secondaryGroupedBackground,
   },
-  bests: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.secondaryGroupedBackground,
-  },
-  best: { flex: 1, gap: spacing[1] },
-  prLabel: { flex: 1, gap: spacing[1] },
-  notes: {
-    minHeight: 88,
-    padding: spacing[4],
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
-    backgroundColor: colors.secondaryGroupedBackground,
-    textAlignVertical: 'top',
-  },
-  headerButton: { paddingHorizontal: spacing[2] },
+  // Suelto sobre el fondo, sin card: son dos líneas de estado, no un dato guardado.
+  callout: { gap: spacing[2], paddingHorizontal: spacing[2] },
 })
 
 /** Las sesiones que mira `isStalled` (E05): el texto las nombra. */
@@ -184,17 +176,8 @@ function PickerRow({
 
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <View>
-      {title ? (
-        <Text
-          accessibilityRole="header"
-          color="secondary"
-          role="footnote"
-          style={styles.sectionTitle}
-        >
-          {title}
-        </Text>
-      ) : null}
+    <View style={styles.section}>
+      {title ? <SectionHeader style={styles.sectionHeader} title={title} /> : null}
       <View style={styles.group}>{children}</View>
     </View>
   )
@@ -255,23 +238,28 @@ export default function ExerciseScreen() {
   const increment = exercise.defaultIncrementG ?? defaultIncrementG(unit)
   const rest = exercise.defaultRestSec ?? settings.defaultRestSec
 
+  // `skipTick`: el háptico de los dos lo pone `onMenu`, y el tic del menú se lo comería (gate global).
   const menuItems = [
     {
       key: 'favorite',
       label: exercise.isFavorite ? t('exercise.unfavorite') : t('exercise.favorite'),
       sf: exercise.isFavorite ? 'star.slash' : 'star',
       md: 'star',
+      skipTick: true,
     },
     {
       key: 'archive',
       label: exercise.isArchived ? t('exercise.unarchive') : t('exercise.archive'),
       sf: exercise.isArchived ? 'tray.and.arrow.up' : 'archivebox',
       md: 'inventory_2',
+      skipTick: true,
     },
   ]
 
   const onMenu = (key: string) => {
-    haptic('toggle')
+    // Prender y apagar no se sienten igual (§12.3): el que saca de favoritos o desarchiva es Soft.
+    const turningOn = key === 'favorite' ? !exercise.isFavorite : !exercise.isArchived
+    haptic(turningOn ? 'toggle' : 'toggleOff')
     if (key === 'favorite') updateExercise(exerciseId, { isFavorite: !exercise.isFavorite })
     else updateExercise(exerciseId, { isArchived: !exercise.isArchived })
   }
@@ -300,26 +288,14 @@ export default function ExerciseScreen() {
         options={{
           headerRight: () => (
             <Menu items={menuItems} onSelect={onMenu}>
-              <View
-                accessible
-                accessibilityLabel={t('common.more')}
-                accessibilityRole="button"
-                style={styles.headerButton}
-              >
-                <SymbolView
-                  fallback={
-                    <Text color="tint" role="title">
-                      ···
-                    </Text>
-                  }
-                  name={{
-                    ios: 'ellipsis.circle' as SFSymbol,
-                    android: 'more_horiz' as AndroidSymbol,
-                  }}
-                  size={20}
-                  tintColor={colors.tint}
-                />
-              </View>
+              <IconButton
+                asMenuTrigger
+                fallback="···"
+                label={t('common.more')}
+                md="more_horiz"
+                sf="ellipsis.circle"
+                tint="tint"
+              />
             </Menu>
           ),
           title: exerciseName(exercise, locale),
@@ -338,8 +314,9 @@ export default function ExerciseScreen() {
           {meta}
         </Text>
 
-        <Section title={t('exercise.notes')}>
-          <TextInput
+        <View style={styles.section}>
+          <SectionHeader style={styles.sectionHeader} title={t('exercise.notes')} />
+          <Input
             accessibilityLabel={t('exercise.notes')}
             multiline
             onBlur={() => {
@@ -349,11 +326,9 @@ export default function ExerciseScreen() {
             }}
             onChangeText={setNotes}
             placeholder={t('exercise.notesPlaceholder')}
-            placeholderTextColor={colors.tertiaryLabel}
-            style={styles.notes}
             value={notes}
           />
-        </Section>
+        </View>
 
         {/* Sin título: el grupo son dos filas que ya se explican solas. */}
         <Section>
@@ -380,70 +355,75 @@ export default function ExerciseScreen() {
         {/* Sin título: el estancamiento y el próximo peso se leen solos, y van pegados a los
             récords porque son la misma pregunta (cómo viene esto). */}
         {progression.stalled || suggestion ? (
-          <Section>
-            <View accessible style={styles.historyRow}>
-              {progression.stalled ? (
-                <Text>{t('exercise.stalled', { n: STALL_SESSIONS })}</Text>
-              ) : null}
-              {suggestion ? (
-                <Text color="secondary" role="footnote" tabular>
-                  {suggestion}
-                </Text>
-              ) : null}
-            </View>
-          </Section>
+          <View accessible style={styles.callout}>
+            {progression.stalled ? (
+              <Badge
+                label={t('exercise.stalled', { n: STALL_SESSIONS })}
+                size="md"
+                tone="warning"
+              />
+            ) : null}
+            {suggestion ? (
+              <Text color="secondary" role="label" tabular>
+                {suggestion}
+              </Text>
+            ) : null}
+          </View>
         ) : null}
 
         {HAS_PRS[exercise.metric] ? (
-          <Section title={t('pr.history')}>
-            {records.list.length === 0 ? (
+          records.list.length === 0 ? (
+            <Section title={t('pr.history')}>
               <View style={styles.historyRow}>
                 <Text color="secondary">{t('pr.none')}</Text>
               </View>
-            ) : (
-              <>
-                <View accessible style={styles.bests}>
-                  {BEST_COLUMNS.map(({ bulk, key, label }) => {
-                    const value = records.bests[key]
-                    return (
-                      <View key={key} style={styles.best}>
-                        {/* Sin `numberOfLines`: con Dynamic Type grande la etiqueta envuelve en vez
-                            de quedar en "Peso…", que en tres columnas se lee todo igual. */}
-                        <Text color="secondary" role="footnote">
-                          {t(label)}
-                        </Text>
-                        <Text role="headline" tabular>
-                          {value === null
-                            ? EMPTY
-                            : formatWeight(value, unit, locale, bulk ? BULK : undefined)}
-                        </Text>
-                      </View>
-                    )
-                  })}
-                </View>
+            </Section>
+          ) : (
+            <View style={styles.block}>
+              <SectionHeader style={styles.sectionHeader} title={t('pr.history')} />
+              <Bento.Row>
+                {BEST_COLUMNS.map(({ bulk, key, label }) => {
+                  const value = records.bests[key]
+                  return (
+                    <Tile
+                      key={key}
+                      title={t(label)}
+                      value={
+                        value === null
+                          ? EMPTY
+                          : formatWeight(value, unit, locale, bulk ? BULK : undefined)
+                      }
+                    />
+                  )
+                })}
+              </Bento.Row>
+              <View style={styles.list}>
                 {records.list.map((pr) => {
                   // `value_g` de un récord de peso corporal es 0, no null (`prRows` normaliza con
                   // `?? 0`): "Reps a 0 kg" no se lee, y el nombre del equipo dice lo mismo.
                   const weight = pr.valueG
                     ? formatWeight(pr.valueG, unit, locale, pr.kind === 'volume' ? BULK : undefined)
                     : t('equipment.bodyweight')
+                  const title = prKindsLabel([pr.kind as PrKind], weight)
+                  const value = String(pr.kind === 'reps_at_weight' ? (pr.reps ?? EMPTY) : weight)
+                  const day = formatDay(pr.achievedAt)
                   return (
-                    <View accessible key={pr.id} style={styles.row}>
-                      <View style={styles.prLabel}>
-                        <Text numberOfLines={1}>{prKindsLabel([pr.kind as PrKind], weight)}</Text>
-                        <Text color="secondary" role="footnote">
-                          {formatDay(pr.achievedAt)}
+                    <ListRow
+                      key={pr.id}
+                      label={`${title}, ${value}, ${day}`}
+                      subtitle={day}
+                      title={title}
+                      trailing={
+                        <Text role="headline" tabular>
+                          {value}
                         </Text>
-                      </View>
-                      <Text role="headline" tabular>
-                        {pr.kind === 'reps_at_weight' ? (pr.reps ?? EMPTY) : weight}
-                      </Text>
-                    </View>
+                      }
+                    />
                   )
                 })}
-              </>
-            )}
-          </Section>
+              </View>
+            </View>
+          )
         ) : null}
 
         <Section title={t('exercise.history')}>

@@ -9,6 +9,9 @@ export default {
   'train.thisWeek': 'This week',
   'train.streak': 'Streak',
   'train.setsLast7': 'Sets, last 7 days',
+  'train.setsLast7A11y': '{n} sets in the last 7 days',
+  'train.sessions.one': 'session',
+  'train.sessions.other': 'sessions',
 
   'history.empty.title': 'No workouts yet',
   'history.empty.description': 'Sessions you finish will show up here.',
@@ -24,6 +27,8 @@ export default {
   'progress.tonnage': 'Total tonnage',
   'progress.streak.one': '{n} week in a row',
   'progress.streak.other': '{n} weeks in a row',
+  'progress.weeks.one': 'week',
+  'progress.weeks.other': 'weeks',
   'progress.consistency': 'Consistency',
   'progress.consistencyA11y': '{days} days trained in the last 12 weeks',
   'progress.exercise': 'Progress by exercise',
@@ -67,6 +72,7 @@ export default {
   'progression.reason.deload': 'deload week',
   'progression.reason.repeat': 'same weight',
 
+  'deload.badge': 'Suggestion',
   'deload.title': 'Time for a deload week?',
   'deload.reasonStall': 'Half of what you have been training is stalled.',
   'deload.reasonRpe': 'You have been training very close to failure.',
@@ -171,6 +177,9 @@ export default {
 
   'a11y.moveUp': 'Move up',
   'a11y.moveDown': 'Move down',
+  // Estado de un switch: la fila lo dice en palabras porque el rol de la fila es 'button'.
+  'a11y.on': 'On',
+  'a11y.off': 'Off',
 
   'session.untitled': 'Workout',
   'session.start': 'Start workout',
@@ -423,6 +432,7 @@ export default {
   'gyms.title': 'Gyms',
   'gyms.new': 'New gym',
   'gyms.empty': 'No gyms yet.',
+  'gyms.active': 'Active',
   'gyms.setActive': 'Use this gym',
   'gyms.setActiveHint': 'If it is already active, tapping again turns it off.',
   'gyms.deleted': 'Gym deleted',

@@ -1,7 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router'
-import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useState } from 'react'
-import { StyleSheet, TextInput, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller'
 import { type Bar, getGym, updateGym } from '@/db/queries/gyms'
 import { getSettings } from '@/db/queries/settings'
@@ -9,13 +8,17 @@ import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
 import { DEFAULT_BAR_G } from '@/lib/plates'
 import { formatWeight, gToUnit, parseWeight, type Unit, unitToG } from '@/lib/units'
+import Button from '@/ui/Button'
+import Card from '@/ui/Card'
 import Chip from '@/ui/Chip'
 import { haptic } from '@/ui/haptics'
-import PressableScale from '@/ui/PressableScale'
+import IconButton from '@/ui/IconButton'
+import Input from '@/ui/Input'
+import SectionHeader from '@/ui/SectionHeader'
 import Stepper from '@/ui/Stepper'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, spacing } from '@/ui/tokens'
 
 // Es un formulario: la fila se lee una sola vez y desde ahí manda el draft. Suscrito, un refresh a
 // mitad de una palabra pisaría lo que se está escribiendo.
@@ -30,71 +33,19 @@ const STANDARD: Record<Unit, number[]> = {
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.groupedBackground, flex: 1 },
   content: { gap: spacing[5], padding: spacing[4], paddingBottom: spacing[6] },
-  sectionTitle: {
-    letterSpacing: 0.4,
-    paddingBottom: spacing[2],
-    paddingHorizontal: spacing[2],
-    textTransform: 'uppercase',
-  },
-  // El fondo del grupo pinta los separadores: un gap de hairline entre filas opacas.
-  group: {
-    backgroundColor: colors.separator,
-    borderRadius: radius.md,
-    gap: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
-  },
-  cell: { backgroundColor: colors.secondaryGroupedBackground, padding: spacing[4] },
-  name: {
-    backgroundColor: colors.secondaryGroupedBackground,
-    color: colors.label,
-    fontSize: 17,
-    lineHeight: 22,
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-  },
+  // El encabezado se alinea con el texto de la card, no con su borde.
+  header: { paddingBottom: spacing[2], paddingHorizontal: spacing[2] },
+  group: { gap: spacing[3] },
+  // Cada barra es un bloque adentro de la card (§12.3): el tono la separa de la de al lado sin
+  // pintar separadores a mano.
+  bar: { gap: spacing[3] },
   barHead: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
-  barName: {
-    borderRadius: radius.sm,
-    color: colors.label,
-    flex: 1,
-    fontSize: 17,
-    lineHeight: 22,
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[2],
-  },
-  iconButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: MIN_TARGET,
-    width: MIN_TARGET,
-  },
-  action: {
-    backgroundColor: colors.secondaryGroupedBackground,
-    justifyContent: 'center',
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[4],
-  },
+  grow: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
   otherRow: { alignItems: 'center', flexDirection: 'row', gap: spacing[3] },
   otherLabel: { flex: 1 },
-  otherInput: {
-    color: colors.label,
-    fontSize: 17,
-    lineHeight: 22,
-    minHeight: MIN_TARGET,
-    minWidth: 96,
-    textAlign: 'right',
-  },
+  otherInput: { fontVariant: ['tabular-nums'], minWidth: 110, textAlign: 'right' },
 })
-
-function SectionTitle({ title }: { title: string }) {
-  return (
-    <Text accessibilityRole="header" color="secondary" role="footnote" style={styles.sectionTitle}>
-      {title}
-    </Text>
-  )
-}
 
 export default function GymScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -169,66 +120,54 @@ export default function GymScreen() {
         keyboardShouldPersistTaps="handled"
         style={styles.screen}
       >
-        <View style={styles.group}>
-          <TextInput
-            accessibilityLabel={t('gyms.name')}
-            autoCapitalize="sentences"
-            autoCorrect={false}
-            maxFontSizeMultiplier={1.6}
-            onChangeText={setName}
-            onEndEditing={commitName}
-            placeholder={t('gyms.name')}
-            placeholderTextColor={colors.tertiaryLabel}
-            returnKeyType="done"
-            style={styles.name}
-            value={name}
-          />
+        <View>
+          <SectionHeader style={styles.header} title={t('gyms.name')} />
+          <Card>
+            <Input
+              accessibilityLabel={t('gyms.name')}
+              autoCapitalize="sentences"
+              autoCorrect={false}
+              onChangeText={setName}
+              onEndEditing={commitName}
+              placeholder={t('gyms.name')}
+              returnKeyType="done"
+              value={name}
+            />
+          </Card>
         </View>
 
         <View>
-          <SectionTitle title={t('gyms.bars')} />
-          <View style={styles.group}>
+          <SectionHeader style={styles.header} title={t('gyms.bars')} />
+          <Card style={styles.group}>
             {bars.map((bar, index) => (
-              <View
+              <Card
                 // La posición ES la identidad: las filas no se reordenan y el estado de cada una
                 // vive en el array, no en el componente.
                 // biome-ignore lint/suspicious/noArrayIndexKey: ver arriba
                 key={index}
-                style={styles.cell}
+                style={styles.bar}
+                variant="inset"
               >
                 <View style={styles.barHead}>
-                  <TextInput
+                  <Input
                     accessibilityLabel={t('gyms.barName')}
-                    maxFontSizeMultiplier={1.6}
                     onChangeText={(value) => setBars(editBar(index, { name: value }))}
                     onEndEditing={() =>
                       commitBars(editBar(index, { name: bar.name.trim() || t('gyms.barDefault') }))
                     }
                     placeholder={t('gyms.barName')}
-                    placeholderTextColor={colors.tertiaryLabel}
                     returnKeyType="done"
-                    style={styles.barName}
+                    style={styles.grow}
                     value={bar.name}
                   />
-                  <PressableScale
-                    accessibilityLabel={`${t('common.delete')}, ${bar.name}`}
+                  <IconButton
+                    fallback="✕"
+                    label={`${t('common.delete')}, ${bar.name}`}
+                    md="remove_circle"
                     onPress={() => removeBar(index)}
-                    style={styles.iconButton}
-                  >
-                    <SymbolView
-                      fallback={
-                        <Text color="destructive" role="body">
-                          ✕
-                        </Text>
-                      }
-                      name={{
-                        android: 'remove_circle' as AndroidSymbol,
-                        ios: 'minus.circle.fill' as SFSymbol,
-                      }}
-                      size={22}
-                      tintColor={colors.destructive}
-                    />
-                  </PressableScale>
+                    sf="minus.circle"
+                    tint="destructive"
+                  />
                 </View>
                 <Stepper
                   format={(v) => formatWeight(unitToG(v, unit), unit, locale)}
@@ -241,27 +180,24 @@ export default function GymScreen() {
                   // unidad es presentación (mismo techo que la hoja de discos).
                   value={Math.round(gToUnit(bar.g, unit) * 100) / 100}
                 />
-              </View>
+              </Card>
             ))}
-            <PressableScale
-              accessibilityLabel={t('gyms.addBar')}
+            <Button
+              md="add"
               onPress={() =>
                 commitBars([...bars, { g: DEFAULT_BAR_G, name: t('gyms.barDefault') }])
               }
-              scale={0.98}
-              style={styles.action}
-            >
-              <Text color="tint" role="callout">
-                {t('gyms.addBar')}
-              </Text>
-            </PressableScale>
-          </View>
+              sf="plus"
+              title={t('gyms.addBar')}
+              variant="plain"
+            />
+          </Card>
         </View>
 
         <View>
-          <SectionTitle title={t('gyms.plates')} />
-          <View style={styles.group}>
-            <View style={[styles.cell, styles.chips]}>
+          <SectionHeader style={styles.header} title={t('gyms.plates')} />
+          <Card style={styles.group}>
+            <View style={styles.chips}>
               {options.map((g) => (
                 <Chip
                   key={g}
@@ -277,7 +213,7 @@ export default function GymScreen() {
                 />
               ))}
             </View>
-            <View style={[styles.cell, styles.otherRow]}>
+            <View style={styles.otherRow}>
               {/* El campo ya se anuncia con esta etiqueta: dejarla visible al lector la lee dos veces. */}
               <Text
                 accessibilityElementsHidden
@@ -288,19 +224,17 @@ export default function GymScreen() {
                 {t('gyms.otherPlate')}
               </Text>
               {/* Se agrega al salir del campo: un teclado decimal no tiene tecla de retorno en iOS. */}
-              <TextInput
+              <Input
                 accessibilityLabel={t('gyms.otherPlate')}
                 keyboardType="decimal-pad"
-                maxFontSizeMultiplier={1.6}
                 onChangeText={setOther}
                 onEndEditing={addOtherPlate}
                 placeholder="0"
-                placeholderTextColor={colors.tertiaryLabel}
                 style={styles.otherInput}
                 value={other}
               />
             </View>
-          </View>
+          </Card>
         </View>
       </KeyboardAwareScrollView>
     </>

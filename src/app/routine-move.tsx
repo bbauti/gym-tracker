@@ -6,23 +6,13 @@ import { useQuery } from '@/db/useQuery'
 import { t } from '@/i18n'
 import { useSheetBottomInset } from '@/ui/keyboard'
 import ListRow from '@/ui/ListRow'
-import PressableScale from '@/ui/PressableScale'
-import Text from '@/ui/Text'
-import { colors, radius, spacing } from '@/ui/tokens'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
+import { radius, spacing } from '@/ui/tokens'
 
 const FOLDER_TABLES = ['folder']
 
 const styles = StyleSheet.create({
-  // Sin flex: 1 — `fitToContents` mide el contenido y un hijo elástico mediría cero (hoja de 0 pt).
-  sheet: { backgroundColor: colors.background, gap: spacing[2], padding: spacing[4] },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: spacing[2],
-  },
-  cancel: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
-  card: { borderRadius: radius.md, overflow: 'hidden' },
+  card: { borderRadius: radius.lg, borderCurve: 'continuous', overflow: 'hidden' },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   hideSeparator: { marginBottom: -StyleSheet.hairlineWidth },
 })
@@ -44,21 +34,8 @@ export default function RoutineMoveScreen() {
   }
 
   return (
-    <View style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}>
-      <View style={styles.header}>
-        <Text accessibilityRole="header" role="headline">
-          {t('routine.moveToFolder')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('common.cancel')}
-          onPress={() => router.back()}
-          style={styles.cancel}
-        >
-          <Text color="tint" role="headline">
-            {t('common.cancel')}
-          </Text>
-        </PressableScale>
-      </View>
+    <View style={[sheetStyles.sheet, { paddingBottom: bottom + spacing[4] }]}>
+      <SheetHeader onCancel={() => router.back()} title={t('routine.moveToFolder')} />
       {/* Con muchas carpetas la hoja topa contra la pantalla: el scroll es lo que evita repetir el
           recorte que trajo esta pantalla al mundo. */}
       <ScrollView>

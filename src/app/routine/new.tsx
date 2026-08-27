@@ -1,30 +1,13 @@
 import { router } from 'expo-router'
 import { useRef, useState } from 'react'
-import { StyleSheet, TextInput, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { createRoutine } from '@/db/queries/routines'
 import { t } from '@/i18n'
 import Button from '@/ui/Button'
+import Input from '@/ui/Input'
 import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
-import Text from '@/ui/Text'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
-
-const styles = StyleSheet.create({
-  // Nada de flex: 1 acá: `fitToContents` mide el contenido, y un hijo que crece a lo que haya
-  // mide cero y deja la hoja del alto de la nada.
-  sheet: { backgroundColor: colors.background, gap: spacing[4], padding: spacing[4] },
-  field: { gap: spacing[2] },
-  input: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.md,
-    color: colors.label,
-    fontSize: 17,
-    lineHeight: 22,
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-  },
-})
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
+import { spacing } from '@/ui/tokens'
 
 export default function NewRoutineScreen() {
   const bottom = useSheetBottomInset()
@@ -54,29 +37,20 @@ export default function NewRoutineScreen() {
       automaticOffset
       behavior="padding"
       enabled={KAV_ENABLED}
-      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
+      style={[sheetStyles.sheet, { paddingBottom: bottom + spacing[4] }]}
     >
-      <Text accessibilityRole="header" role="headline">
-        {t('routine.new')}
-      </Text>
+      {/* Sin "Listo": de esta hoja se sale creando (o arrastrándola). */}
+      <SheetHeader title={t('routine.new')} />
 
-      <View style={styles.field}>
-        <Text color="secondary" role="footnote">
-          {t('routine.name')}
-        </Text>
-        <TextInput
-          accessibilityLabel={t('routine.name')}
-          autoFocus
-          maxFontSizeMultiplier={1.6}
-          onChangeText={setName}
-          onSubmitEditing={create}
-          placeholder={t('routine.namePlaceholder')}
-          placeholderTextColor={colors.tertiaryLabel}
-          returnKeyType="done"
-          style={styles.input}
-          value={name}
-        />
-      </View>
+      <Input
+        autoFocus
+        label={t('routine.name')}
+        onChangeText={setName}
+        onSubmitEditing={create}
+        placeholder={t('routine.namePlaceholder')}
+        returnKeyType="done"
+        value={name}
+      />
 
       <Button disabled={trimmed === ''} onPress={create} title={t('common.create')} />
     </KeyboardAvoidingView>

@@ -1,6 +1,5 @@
 import { FlashList } from '@shopify/flash-list'
 import { router, Stack } from 'expo-router'
-import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import {
@@ -15,9 +14,13 @@ import { locale, t } from '@/i18n'
 import Chip from '@/ui/Chip'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import PressableScale from '@/ui/PressableScale'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, spacing } from '@/ui/tokens'
+import { colors, opacity, Press, spacing } from '@/ui/tokens'
+
+/** Fila del catálogo: 52 pt, no 44 (§12.5). Dos líneas de texto piden más aire que un target. */
+const ROW_MIN = 52
 
 const styles = StyleSheet.create({
   list: { backgroundColor: colors.background },
@@ -31,18 +34,14 @@ const styles = StyleSheet.create({
   },
   rowMain: {
     flex: 1,
-    minHeight: MIN_TARGET,
+    minHeight: ROW_MIN,
     justifyContent: 'center',
     paddingVertical: spacing[2],
   },
-  archived: { opacity: 0.5 },
-  star: {
-    width: MIN_TARGET,
-    minHeight: MIN_TARGET,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  header: { paddingHorizontal: spacing[2] },
+  // 500 no es un rol: es `body` con un pelo más de peso para que el nombre gane a su propia meta
+  // sin llegar a `headline`, que en 40 filas seguidas grita.
+  name: { fontWeight: '500' },
+  archived: { opacity: opacity.ghost },
   footer: { alignItems: 'center', padding: spacing[4] },
   empty: { paddingTop: spacing[6] },
 })
@@ -66,22 +65,14 @@ const noResults = (
 
 function HeaderAdd() {
   return (
-    <PressableScale
-      accessibilityLabel={t('library.new')}
+    <IconButton
+      fallback="+"
+      label={t('library.new')}
+      md="add"
       onPress={() => router.push('/exercise/new')}
-      style={styles.header}
-    >
-      <SymbolView
-        fallback={
-          <Text color="tint" role="title">
-            +
-          </Text>
-        }
-        name={{ ios: 'plus' as SFSymbol, android: 'add' as AndroidSymbol }}
-        size={20}
-        tintColor={colors.tint}
-      />
-    </PressableScale>
+      sf="plus"
+      tint="tint"
+    />
   )
 }
 
@@ -96,37 +87,30 @@ function ExerciseRow({ item }: { item: Exercise }) {
       <PressableScale
         accessibilityLabel={`${name}, ${meta}`}
         onPress={() => router.push({ pathname: '/exercise/[id]', params: { id: item.id } })}
-        scale={0.98}
+        scale={Press.row}
         style={styles.rowMain}
       >
-        <Text numberOfLines={1}>{name}</Text>
+        <Text numberOfLines={1} style={styles.name}>
+          {name}
+        </Text>
         <Text color="secondary" numberOfLines={1} role="footnote">
           {meta}
         </Text>
       </PressableScale>
-      <PressableScale
-        accessibilityLabel={fav ? t('exercise.unfavorite') : t('exercise.favorite')}
+      {/* Figura Y color: la favorita es acento y relleno, el resto contorno terciario. Cuarenta
+          estrellas en acento le ganarían al nombre, que es lo que se lee de reojo en la lista. */}
+      <IconButton
         accessibilityState={{ selected: fav }}
+        fallback={fav ? '★' : '☆'}
+        label={fav ? t('exercise.unfavorite') : t('exercise.favorite')}
+        md={fav ? 'star' : 'star_border'}
         onPress={() => {
-          haptic('toggle')
+          haptic(fav ? 'toggleOff' : 'toggle')
           updateExercise(item.id, { isFavorite: !fav })
         }}
-        style={styles.star}
-      >
-        <SymbolView
-          fallback={
-            <Text color={fav ? 'tint' : 'tertiary'} role="callout">
-              {fav ? '★' : '☆'}
-            </Text>
-          }
-          name={{
-            ios: (fav ? 'star.fill' : 'star') as SFSymbol,
-            android: 'star' as AndroidSymbol,
-          }}
-          size={18}
-          tintColor={fav ? colors.tint : colors.tertiaryLabel}
-        />
-      </PressableScale>
+        sf={fav ? 'star.fill' : 'star'}
+        tint={fav ? 'tint' : 'tertiary'}
+      />
     </View>
   )
 }

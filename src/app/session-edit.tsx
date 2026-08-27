@@ -1,40 +1,28 @@
 import { DateTimePicker } from '@expo/ui/community/datetime-picker'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
-import { Platform, StyleSheet, TextInput, View } from 'react-native'
+import { Platform, StyleSheet, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { getSession, updateSession } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import Input from '@/ui/Input'
 import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
 import PressableScale from '@/ui/PressableScale'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, Press, radius, spacing } from '@/ui/tokens'
 
 const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'full' })
 
 const styles = StyleSheet.create({
-  // Nada de flex: 1 acá: `fitToContents` mide el contenido, y un hijo que crece a lo que haya
-  // mide cero y deja la hoja del alto de la nada.
-  sheet: { backgroundColor: colors.background, padding: spacing[4], gap: spacing[4] },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
-  field: { gap: spacing[2] },
-  input: {
-    minHeight: MIN_TARGET,
-    borderRadius: radius.md,
-    backgroundColor: colors.fill,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
-  },
-  note: { minHeight: 88, textAlignVertical: 'top' },
+  field: { gap: spacing[1] },
+  // Un campo más, pero el valor lo elige un picker: la caja es la del `Input` a mano.
   dateRow: {
     minHeight: MIN_TARGET,
     justifyContent: 'center',
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     backgroundColor: colors.fill,
     paddingHorizontal: spacing[3],
   },
@@ -76,76 +64,59 @@ export default function SessionEditScreen() {
       automaticOffset
       behavior="padding"
       enabled={KAV_ENABLED}
-      style={[styles.sheet, { paddingBottom: bottom + spacing[4] }]}
+      style={[sheetStyles.sheet, { paddingBottom: bottom + spacing[4] }]}
     >
-      <View style={styles.header}>
-        <Text accessibilityRole="header" role="headline">
-          {t('sessionEdit.title')}
-        </Text>
-        <PressableScale accessibilityLabel={t('common.done')} onPress={save} style={styles.done}>
-          <Text color="tint" role="headline">
-            {t('common.done')}
-          </Text>
-        </PressableScale>
-      </View>
+      <SheetHeader onDone={save} title={t('sessionEdit.title')} />
 
-      <View style={styles.field}>
-        <Text color="secondary" role="footnote">
-          {t('sessionEdit.name')}
-        </Text>
-        <TextInput
-          accessibilityLabel={t('sessionEdit.name')}
-          maxFontSizeMultiplier={1.6}
+      <View style={sheetStyles.content}>
+        <Input
+          label={t('sessionEdit.name')}
           onChangeText={setName}
           placeholder={t('session.untitled')}
-          placeholderTextColor={colors.tertiaryLabel}
           returnKeyType="done"
-          style={styles.input}
           value={name}
         />
-      </View>
 
-      <View style={styles.field}>
-        <Text color="secondary" role="footnote">
-          {t('sessionEdit.date')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={`${t('sessionEdit.date')}: ${dateFormat.format(date)}`}
-          accessibilityState={{ expanded: picking }}
-          onPress={() => setPicking(!picking)}
-          scale={0.98}
-          style={styles.dateRow}
-        >
-          <Text>{dateFormat.format(date)}</Text>
-        </PressableScale>
-        {/* En iOS el picker es siempre inline (`presentation` se ignora) y se despliega debajo de
-            la fila; en Android se monta como diálogo y hay que desmontarlo al cerrarlo. */}
-        {picking ? (
-          <DateTimePicker
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            mode="date"
-            onDismiss={() => setPicking(false)}
-            onValueChange={(_event, next) => {
-              setDate(next)
-              if (Platform.OS !== 'ios') setPicking(false)
-            }}
-            value={date}
-          />
-        ) : null}
-      </View>
+        <View style={styles.field}>
+          {/* La etiqueta va escondida del lector: la fila ya se anuncia con ella adentro. */}
+          <Text
+            accessibilityElementsHidden
+            color="secondary"
+            importantForAccessibility="no-hide-descendants"
+            role="label"
+          >
+            {t('sessionEdit.date')}
+          </Text>
+          <PressableScale
+            accessibilityLabel={`${t('sessionEdit.date')}: ${dateFormat.format(date)}`}
+            accessibilityState={{ expanded: picking }}
+            onPress={() => setPicking(!picking)}
+            scale={Press.row}
+            style={styles.dateRow}
+          >
+            <Text>{dateFormat.format(date)}</Text>
+          </PressableScale>
+          {/* En iOS el picker es siempre inline (`presentation` se ignora) y se despliega debajo de
+              la fila; en Android se monta como diálogo y hay que desmontarlo al cerrarlo. */}
+          {picking ? (
+            <DateTimePicker
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              mode="date"
+              onDismiss={() => setPicking(false)}
+              onValueChange={(_event, next) => {
+                setDate(next)
+                if (Platform.OS !== 'ios') setPicking(false)
+              }}
+              value={date}
+            />
+          ) : null}
+        </View>
 
-      <View style={styles.field}>
-        <Text color="secondary" role="footnote">
-          {t('sessionEdit.note')}
-        </Text>
-        <TextInput
-          accessibilityLabel={t('sessionEdit.note')}
-          maxFontSizeMultiplier={1.6}
+        <Input
+          label={t('sessionEdit.note')}
           multiline
           onChangeText={setNote}
           placeholder={t('note.placeholder')}
-          placeholderTextColor={colors.tertiaryLabel}
-          style={[styles.input, styles.note]}
           value={note}
         />
       </View>

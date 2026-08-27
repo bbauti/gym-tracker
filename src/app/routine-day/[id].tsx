@@ -19,10 +19,12 @@ import {
 } from '@/db/queries/routines'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import Badge from '@/ui/Badge'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import Menu, { type MenuItem } from '@/ui/Menu'
 import { RowLayout, useEnterFade } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
@@ -30,7 +32,7 @@ import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, Press, spacing } from '@/ui/tokens'
 
 type DayEntry = RoutineTree['days'][number]
 type ExerciseEntry = DayEntry['exercises'][number]
@@ -42,7 +44,8 @@ const REST_OPTIONS = [60, 90, 120, 180]
 const REST_DEFAULT_KEY = 'rest:default'
 
 const DAY_MENU: MenuItem[] = [
-  { key: 'edit', label: t('day.edit'), md: 'edit', sf: 'pencil' },
+  // `skipTick`: "Editar" abre otra pantalla y la transición ya es el feedback (§7.4).
+  { key: 'edit', label: t('day.edit'), md: 'edit', skipTick: true, sf: 'pencil' },
   { destructive: true, key: 'delete', label: t('day.delete'), md: 'delete', sf: 'trash' },
 ]
 
@@ -62,14 +65,7 @@ const styles = StyleSheet.create({
   content: { padding: spacing[4] },
   cardSlot: { paddingBottom: spacing[4] },
   empty: { marginBottom: spacing[4], minHeight: 240 },
-  deload: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.md,
-    gap: spacing[1],
-    marginBottom: spacing[4],
-    overflow: 'hidden',
-    padding: spacing[3],
-  },
+  deload: { gap: spacing[2], marginBottom: spacing[4] },
   card: { gap: spacing[1] },
   cardHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
   cardTitle: { flex: 1 },
@@ -90,14 +86,7 @@ const styles = StyleSheet.create({
   index: { minWidth: 22, textAlign: 'center' },
   // `flexShrink`: a Dynamic Type grande "Entrada en calor" se comía la fila y el que se achicaba era
   // el rango de reps, que es la única razón por la que existe esta pantalla. Cede el chip.
-  kind: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.sm,
-    flexShrink: 1,
-    overflow: 'hidden',
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[1] / 2,
-  },
+  kindSlot: { flexShrink: 1 },
   reps: { flex: 1 },
   addSet: { alignItems: 'center', justifyContent: 'center', minHeight: MIN_TARGET },
 })
@@ -204,26 +193,14 @@ export default function RoutineDayScreen() {
         options={{
           headerRight: () => (
             <Menu items={DAY_MENU} onSelect={handleDayMenu}>
-              <View
-                accessible
-                accessibilityLabel={t('common.more')}
-                accessibilityRole="button"
-                style={styles.more}
-              >
-                <SymbolView
-                  fallback={
-                    <Text color="tint" role="title">
-                      ⋯
-                    </Text>
-                  }
-                  name={{
-                    ios: 'ellipsis.circle' as SFSymbol,
-                    android: 'more_horiz' as AndroidSymbol,
-                  }}
-                  size={22}
-                  tintColor={colors.tint}
-                />
-              </View>
+              <IconButton
+                asMenuTrigger
+                fallback="⋯"
+                label={t('common.more')}
+                md="more_horiz"
+                sf="ellipsis.circle"
+                tint="tint"
+              />
             </Menu>
           ),
           title: day.name,
@@ -238,14 +215,12 @@ export default function RoutineDayScreen() {
         scrollEventThrottle={16}
       >
         {day.isDeload ? (
-          <View style={styles.deload}>
-            <Text color="tint" role="headline">
-              {t('day.deload')}
-            </Text>
+          <Card style={styles.deload}>
+            <Badge label={t('day.deload')} size="md" tone="warning" />
             <Text color="secondary" role="footnote">
               {t('day.deloadHint')}
             </Text>
-          </View>
+          </Card>
         ) : null}
         {exercises.length === 0 ? (
           <View style={styles.empty}>
@@ -302,7 +277,7 @@ function ExerciseCard({ item, onMenu, onDeleteSet, a11y }: CardProps) {
   const fadeIn = useEnterFade(sets.map((s) => s.id))
 
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} variant="raised">
       <View style={styles.cardHeader}>
         <View style={styles.cardTitle}>
           <Text numberOfLines={2} role="headline">
@@ -347,7 +322,7 @@ function ExerciseCard({ item, onMenu, onDeleteSet, a11y }: CardProps) {
       <PressableScale
         accessibilityLabel={`${t('day.addSet')}, ${name}`}
         onPress={() => addRoutineSet(re.id)}
-        scale={0.98}
+        scale={Press.row}
         style={styles.addSet}
       >
         <Text color="tint" role="callout">
@@ -382,17 +357,15 @@ function SetTargetRow({
         if (e.nativeEvent.actionName === 'delete') onDelete()
       }}
       onPress={() => router.push({ params: { id: set.id }, pathname: '/routine-set' })}
-      scale={0.98}
+      scale={Press.row}
       style={styles.setRow}
     >
       <Text color="secondary" role="footnote" style={styles.index} tabular>
         {index + 1}
       </Text>
       {kind === null ? null : (
-        <View style={styles.kind}>
-          <Text color="tint" numberOfLines={1} role="caption">
-            {kind}
-          </Text>
+        <View style={styles.kindSlot}>
+          <Badge label={kind} tone="tint" />
         </View>
       )}
       <Text numberOfLines={1} style={styles.reps}>

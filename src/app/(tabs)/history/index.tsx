@@ -8,13 +8,16 @@ import { trainingDays } from '@/db/queries/stats'
 import { useQuery } from '@/db/useQuery'
 import { locale, plural, t } from '@/i18n'
 import { formatDuration, formatWeight, type Unit } from '@/lib/units'
+import Bento from '@/ui/Bento'
 import Card from '@/ui/Card'
 import Chip from '@/ui/Chip'
 import EmptyState from '@/ui/EmptyState'
 import ListRow from '@/ui/ListRow'
 import MonthCalendar, { addMonths, startOfMonth } from '@/ui/MonthCalendar'
+import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
-import { colors, spacing } from '@/ui/tokens'
+import Tile from '@/ui/Tile'
+import { colors, radius, spacing } from '@/ui/tokens'
 
 const PAGE = 50
 
@@ -39,16 +42,15 @@ type Row =
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
   list: { backgroundColor: colors.groupedBackground },
-  day: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[5],
-    paddingBottom: spacing[2],
-  },
-  header: { padding: spacing[4], paddingBottom: 0 },
+  // El uppercase y el tracking los pone `SectionHeader`: acá solo queda el aire del separador.
+  day: { paddingHorizontal: spacing[4], paddingTop: spacing[5], paddingBottom: spacing[2] },
+  header: { padding: spacing[4], paddingBottom: 0, gap: spacing[3] },
+  // Radio de tile, no de card: el calendario y los dos tiles de abajo son la misma superficie.
+  calendar: { borderRadius: radius.xl },
   // Fila propia y `flex-start`: dentro de la fila el chip se estira a todo el ancho.
-  chipRow: { flexDirection: 'row', alignItems: 'flex-start', paddingTop: spacing[3] },
+  chipRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  // Los dos números de la derecha se leen como columna: alineados por el borde y tabulares.
+  meta: { alignItems: 'flex-end' },
   noResults: { padding: spacing[6], textAlign: 'center' },
 })
 
@@ -121,22 +123,27 @@ function SessionRow({ summary, unit }: { summary: SessionSummary; unit: Unit }) 
       t('history.sets.one', { n: setCount }),
       t('history.sets.other', { n: setCount }),
     ),
-    // El volumen es una suma de gramos: en lb sin redondear salía "480,01 lb".
-    formatWeight(volumeG, unit, locale, { maxFractionDigits: 0 }),
   ].join(' · ')
+  // El volumen es una suma de gramos: en lb sin redondear salía "480,01 lb".
+  const volume = formatWeight(volumeG, unit, locale, { maxFractionDigits: 0 })
   const duration = formatDuration(durationMs)
   return (
     <ListRow
       chevron
-      // La fila es un solo elemento accesible: la duración se anuncia por el label, no sola.
-      label={`${title}, ${subtitle}, ${t('history.duration')}: ${duration}`}
+      // La fila es un solo elemento accesible: la columna de la derecha se anuncia por el label.
+      label={`${title}, ${subtitle}, ${volume}, ${t('history.duration')}: ${duration}`}
       onPress={() => router.push({ pathname: '/session/[id]', params: { id: session.id } })}
       subtitle={subtitle}
       title={title}
       trailing={
-        <Text color="secondary" role="footnote" tabular>
-          {duration}
-        </Text>
+        <View style={styles.meta}>
+          <Text numberOfLines={1} role="label" tabular>
+            {duration}
+          </Text>
+          <Text color="secondary" numberOfLines={1} role="footnote" tabular>
+            {volume}
+          </Text>
+        </View>
       }
     />
   )
@@ -161,12 +168,12 @@ export default function HistoryScreen() {
   const marks = useQuery(() => trainingDays(month, addMonths(month, 1)), ['session'], [month])
 
   const rows = buildRows(page)
+  // Los dos tiles salen del mismo `marks` que pinta el calendario: sin query nueva.
+  const monthSessions = marks.reduce((n, mark) => n + mark.sessions, 0)
 
   const renderItem = ({ item }: ListRenderItemInfo<Row>) =>
     item.kind === 'day' ? (
-      <Text accessibilityRole="header" color="secondary" role="footnote" style={styles.day}>
-        {item.label}
-      </Text>
+      <SectionHeader style={styles.day} title={item.label} />
     ) : (
       <SessionRow summary={item.summary} unit={unit} />
     )
@@ -199,7 +206,9 @@ export default function HistoryScreen() {
 
   const header = (
     <View style={styles.header}>
-      <Card>
+      {/* `Card raised` y no `Tile`: el tile es UN elemento accesible y le taparía a VoiceOver los
+          días y las flechas del calendario. La superficie es la misma (sombra + hairline + radio). */}
+      <Card style={styles.calendar} variant="raised">
         <MonthCalendar
           days={marks}
           month={month}
@@ -212,6 +221,10 @@ export default function HistoryScreen() {
           selected={day}
         />
       </Card>
+      <Bento.Row>
+        <Tile title={t('history.monthSessions')} value={String(monthSessions)} />
+        <Tile title={t('history.monthDays')} value={String(marks.length)} />
+      </Bento.Row>
       {day === null ? null : (
         <View style={styles.chipRow}>
           <Chip

@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import Animated, { FadeIn } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { activeGym } from '@/db/queries/gyms'
 import { getSettings } from '@/db/queries/settings'
@@ -9,8 +9,10 @@ import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
 import { DEFAULT_BAR_G, DEFAULT_PLATES_G, nearestLoadable, platesFor } from '@/lib/plates'
 import { formatWeight } from '@/lib/units'
+import BigNumber from '@/ui/BigNumber'
 import Chip from '@/ui/Chip'
-import PressableScale from '@/ui/PressableScale'
+import { Enter } from '@/ui/motion'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Text from '@/ui/Text'
 import { colors, radius, spacing } from '@/ui/tokens'
 
@@ -23,10 +25,6 @@ const PILL_MIN = 44
 const PILL_RANGE = 32
 
 const styles = StyleSheet.create({
-  // Sin flex: la sheet es fitToContents y un flex:1 la deja de alto cero.
-  sheet: { padding: spacing[4], gap: spacing[3], backgroundColor: colors.background },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  done: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
   plates: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -41,7 +39,8 @@ const styles = StyleSheet.create({
     minWidth: 52,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2],
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
     backgroundColor: colors.fill,
   },
   // Decorativo: el sleeve de la barra debajo de los discos. Sin texto, VoiceOver no lo ve.
@@ -75,84 +74,77 @@ export default function PlatesScreen() {
     bars.length > 1 ? `${bar.name} · ${weight(bar.g)}` : t('plates.bar', { w: weight(bar.g) })
 
   return (
-    <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}>
-      <View style={styles.head}>
-        <Text accessibilityRole="header" role="headline">
-          {t('plates.title')}
+    <View style={[sheetStyles.sheet, { paddingBottom: insets.bottom + spacing[4] }]}>
+      <SheetHeader onDone={() => router.back()} title={t('plates.title')} />
+
+      <View style={sheetStyles.content}>
+        {/* El peso partido en número y unidad: el `kg` no se gana los 56 pt del numeral. Sale igual
+            que `formatWeight` con unidad, que es lo que se veía antes. */}
+        <BigNumber
+          align="center"
+          unit={unit}
+          value={formatWeight(targetG, unit, locale, { withUnit: false })}
+        />
+        <Text color="secondary" role="footnote" style={styles.centered}>
+          {t('plates.perSide')}
         </Text>
-        <PressableScale
-          accessibilityLabel={t('common.done')}
-          onPress={() => router.back()}
-          style={styles.done}
+
+        {/* Fade al montar y nada más: los discos solo cambian si se toca otra barra. */}
+        <Animated.View
+          accessible
+          accessibilityLabel={`${t('plates.perSide')}: ${
+            perSide.length > 0 ? perSide.map(weight).join(', ') : barLabel
+          }`}
+          entering={Enter.fade}
+          style={styles.plates}
         >
-          <Text color="tint" role="headline">
-            {t('common.done')}
-          </Text>
-        </PressableScale>
-      </View>
+          {perSide.length > 0 ? (
+            perSide.map((g, i) => (
+              <View
+                // Los discos repetidos no tienen id: la posición es la identidad y la lista no se reordena.
+                // biome-ignore lint/suspicious/noArrayIndexKey: ver arriba
+                key={`${g}:${i}`}
+                style={[styles.pill, { minHeight: PILL_MIN + PILL_RANGE * (g / heaviest) }]}
+              >
+                <Text role="callout" tabular>
+                  {formatWeight(g, unit, locale, { withUnit: false })}
+                </Text>
+              </View>
+            ))
+          ) : (
+            <Text color="tertiary" role="body">
+              —
+            </Text>
+          )}
+        </Animated.View>
 
-      <Text role="largeTitle" style={styles.centered} tabular>
-        {weight(targetG)}
-      </Text>
-      <Text color="secondary" role="footnote" style={styles.centered}>
-        {t('plates.perSide')}
-      </Text>
-
-      {/* FadeIn al montar y nada más: los discos solo cambian si se toca otra barra. */}
-      <Animated.View
-        accessible
-        accessibilityLabel={`${t('plates.perSide')}: ${
-          perSide.length > 0 ? perSide.map(weight).join(', ') : barLabel
-        }`}
-        entering={FadeIn.duration(200)}
-        style={styles.plates}
-      >
-        {perSide.length > 0 ? (
-          perSide.map((g, i) => (
-            <View
-              // Los discos repetidos no tienen id: la posición es la identidad y la lista no se reordena.
-              // biome-ignore lint/suspicious/noArrayIndexKey: ver arriba
-              key={`${g}:${i}`}
-              style={[styles.pill, { minHeight: PILL_MIN + PILL_RANGE * (g / heaviest) }]}
-            >
-              <Text role="callout" tabular>
-                {formatWeight(g, unit, locale, { withUnit: false })}
-              </Text>
-            </View>
-          ))
-        ) : (
-          <Text color="tertiary" role="body">
-            —
-          </Text>
-        )}
-      </Animated.View>
-
-      <View style={styles.bar} />
-      <Text color="secondary" role="footnote" style={styles.centered}>
-        {barLabel}
-      </Text>
-
-      {bars.length > 1 ? (
-        <View style={styles.bars}>
-          {bars.map((b, i) => (
-            <Chip
-              accessibilityLabel={`${b.name}, ${weight(b.g)}`}
-              // Dos barras pueden llamarse igual y pesar lo mismo: la posición es la identidad.
-              // biome-ignore lint/suspicious/noArrayIndexKey: ver arriba
-              key={i}
-              label={b.name}
-              onPress={() => setBarIndex(i)}
-              selected={i === activeBar}
-            />
-          ))}
-        </View>
-      ) : null}
-
-      {loadableG !== targetG ? (
-        <Text color="tertiary" role="footnote" style={styles.centered}>
-          {t('plates.notLoadable', { w: weight(loadableG) })}
+        <View style={styles.bar} />
+        <Text color="secondary" role="footnote" style={styles.centered}>
+          {barLabel}
         </Text>
-      ) : null}
+
+        {bars.length > 1 ? (
+          <View style={styles.bars}>
+            {bars.map((b, i) => (
+              <Chip
+                accessibilityLabel={`${b.name}, ${weight(b.g)}`}
+                // Dos barras pueden llamarse igual y pesar lo mismo: la posición es la identidad.
+                // biome-ignore lint/suspicious/noArrayIndexKey: ver arriba
+                key={i}
+                label={b.name}
+                onPress={() => setBarIndex(i)}
+                selected={i === activeBar}
+              />
+            ))}
+          </View>
+        ) : null}
+
+        {loadableG !== targetG ? (
+          <Text color="tertiary" role="footnote" style={styles.centered}>
+            {t('plates.notLoadable', { w: weight(loadableG) })}
+          </Text>
+        ) : null}
+      </View>
     </View>
   )
 }

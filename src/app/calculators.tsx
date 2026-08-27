@@ -1,6 +1,6 @@
 import { router, Stack } from 'expo-router'
 import { useState } from 'react'
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { latest } from '@/db/queries/body'
 import { activeGym } from '@/db/queries/gyms'
 import { getSettings } from '@/db/queries/settings'
@@ -11,12 +11,17 @@ import { e1rmG } from '@/lib/prs'
 import { formatWeight, gToUnit, parseWeight, type Unit } from '@/lib/units'
 import { warmupRamp } from '@/lib/warmup'
 import { dots, wilks2020 } from '@/lib/wilks'
+import Bento from '@/ui/Bento'
 import Card from '@/ui/Card'
 import Chip from '@/ui/Chip'
+import Input from '@/ui/Input'
 import { useAndroidKeyboardHeight } from '@/ui/keyboard'
+import { useStagger } from '@/ui/motion'
 import PressableScale from '@/ui/PressableScale'
+import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import Tile from '@/ui/Tile'
+import { colors, MIN_TARGET, spacing } from '@/ui/tokens'
 
 const PERCENTS = Array.from({ length: 11 }, (_, i) => 50 + i * 5)
 const EMPTY = '—'
@@ -30,26 +35,18 @@ const convertFormat = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
-  content: { padding: spacing[4], gap: spacing[4] },
+  content: { padding: spacing[4], gap: spacing[5] },
+  // Encabezado y card son una unidad; entre bloques manda el gap del contenido.
+  block: { gap: spacing[2] },
+  header: { paddingHorizontal: spacing[2] },
   card: { gap: spacing[2] },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], minHeight: MIN_TARGET },
   compact: { minHeight: 32 },
   rowLabel: { flex: 1 },
   suffix: { minWidth: 22 },
   chips: { flexDirection: 'row', gap: spacing[2] },
-  input: {
-    minWidth: 96,
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    borderRadius: radius.sm,
-    backgroundColor: colors.fill,
-    textAlign: 'right',
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
-    fontVariant: ['tabular-nums'],
-  },
+  // Alto, fondo, radio y foco los pone `ui/Input`: acá solo el ancho y la alineación de la columna.
+  input: { minWidth: 96, textAlign: 'right', fontVariant: ['tabular-nums'] },
   link: { justifyContent: 'center', minHeight: MIN_TARGET },
 })
 
@@ -76,13 +73,11 @@ function Field({
       >
         {label}
       </Text>
-      <TextInput
+      <Input
         accessibilityLabel={label}
         keyboardType={integer ? 'number-pad' : 'decimal-pad'}
-        maxFontSizeMultiplier={1.6}
         onChangeText={onChangeText}
         placeholder="0"
-        placeholderTextColor={colors.tertiaryLabel}
         returnKeyType="done"
         style={styles.input}
         value={value}
@@ -121,7 +116,13 @@ function OutRow({
       accessibilityLabel={`${label}: ${spoken ?? value}`}
       style={[styles.row, compact && styles.compact]}
     >
-      <Text color="secondary" style={styles.rowLabel}>
+      {/* En la tabla de porcentajes el label ES una columna de números: tabular y 13/600. */}
+      <Text
+        color="secondary"
+        role={compact ? 'label' : 'body'}
+        style={styles.rowLabel}
+        tabular={compact}
+      >
         {label}
       </Text>
       <Text role="headline" tabular>
@@ -136,6 +137,8 @@ export default function CalculatorsScreen() {
   const gym = useQuery(activeGym, ['settings', 'gym'])
   const bodyweightG = useQuery(() => latest('bodyweight')?.value ?? null, ['body_metric'])
   const keyboard = useAndroidKeyboardHeight()
+  // Los resultados se montan con la pantalla y ya no vuelven a animar: tipear no dispara nada.
+  const stagger = useStagger()
 
   // La primera barra del gimnasio activo es la que redondea todo; sin gimnasio, las tablas por
   // defecto. Un gimnasio sin barras cargadas también cae en la de 20 kg, y uno con todos los discos
@@ -154,6 +157,8 @@ export default function CalculatorsScreen() {
   const [total, setTotal] = useState('')
 
   const weight = (g: number) => formatWeight(g, unit, locale)
+  // En un tile la unidad va aparte del numeral: el número grande queda solo.
+  const amount = (g: number) => formatWeight(g, unit, locale, { withUnit: false })
   const loadable = (g: number) => nearestLoadable(g, load.barG, load.platesG)
 
   const rmWeightG = parseWeight(rmWeight, unit)
@@ -188,128 +193,143 @@ export default function CalculatorsScreen() {
         keyboardShouldPersistTaps="handled"
         style={styles.screen}
       >
-        <Card style={styles.card}>
-          <Text accessibilityRole="header" role="headline">
-            {t('calc.oneRm')}
-          </Text>
-          <Field
-            label={t('calc.weight')}
-            onChangeText={setRmWeight}
-            suffix={unit}
-            value={rmWeight}
-          />
-          <Field integer label={t('calc.reps')} onChangeText={setRmReps} value={rmReps} />
-          <OutRow label={t('calc.result')} value={oneRmG === null ? EMPTY : weight(oneRmG)} />
-        </Card>
+        <View style={styles.block}>
+          <SectionHeader style={styles.header} title={t('calc.oneRm')} />
+          <Card style={styles.card}>
+            <Field
+              label={t('calc.weight')}
+              onChangeText={setRmWeight}
+              suffix={unit}
+              value={rmWeight}
+            />
+            <Field integer label={t('calc.reps')} onChangeText={setRmReps} value={rmReps} />
+          </Card>
+          {/* Siempre montado, con guión mientras falte un dato: si apareciera al tipear, el tile
+              entraría con animación en medio de una tecla (§7.5). */}
+          <Bento.Row>
+            <Tile
+              entering={stagger(0)}
+              title={t('calc.oneRm')}
+              unit={oneRmG === null ? undefined : unit}
+              value={oneRmG === null ? EMPTY : amount(oneRmG)}
+            />
+          </Bento.Row>
+        </View>
 
         {/* Sin 1RM la tabla mostraría once veces la barra vacía: aparece cuando hay número. */}
         {oneRmG !== null ? (
+          <View style={styles.block}>
+            <SectionHeader style={styles.header} title={t('calc.percentages')} />
+            <Card style={styles.card}>
+              {PERCENTS.map((p) => (
+                <OutRow
+                  compact
+                  key={p}
+                  label={percentFormat.format(p / 100)}
+                  value={weight(loadable((oneRmG * p) / 100))}
+                />
+              ))}
+            </Card>
+          </View>
+        ) : null}
+
+        <View style={styles.block}>
+          <SectionHeader style={styles.header} title={t('calc.warmup')} />
           <Card style={styles.card}>
-            <Text accessibilityRole="header" role="headline">
-              {t('calc.percentages')}
+            <Field
+              label={t('calc.workWeight')}
+              onChangeText={setWorkWeight}
+              suffix={unit}
+              value={workWeight}
+            />
+            <Text color="secondary" role="footnote">
+              {`${t('calc.bar')}: ${weight(load.barG)}`}
             </Text>
-            {PERCENTS.map((p) => (
+            {ramp?.length === 0 ? (
+              <Text color="tertiary" role="footnote">
+                {t('calc.rampEmpty')}
+              </Text>
+            ) : null}
+            {ramp?.map((step, i) => (
               <OutRow
-                compact
-                key={p}
-                label={percentFormat.format(p / 100)}
-                value={weight(loadable((oneRmG * p) / 100))}
+                key={step.weightG}
+                label={t('calc.rampStep', { n: i + 1 })}
+                spoken={`${weight(step.weightG)}, ${t('calc.rampReps', { n: step.reps })}`}
+                value={`${weight(step.weightG)} × ${step.reps}`}
               />
             ))}
           </Card>
-        ) : null}
+        </View>
 
-        <Card style={styles.card}>
-          <Text accessibilityRole="header" role="headline">
-            {t('calc.warmup')}
-          </Text>
-          <Field
-            label={t('calc.workWeight')}
-            onChangeText={setWorkWeight}
-            suffix={unit}
-            value={workWeight}
-          />
-          <Text color="secondary" role="footnote">
-            {`${t('calc.bar')}: ${weight(load.barG)}`}
-          </Text>
-          {ramp?.length === 0 ? (
-            <Text color="tertiary" role="footnote">
-              {t('calc.rampEmpty')}
-            </Text>
-          ) : null}
-          {ramp?.map((step, i) => (
-            <OutRow
-              key={step.weightG}
-              label={t('calc.rampStep', { n: i + 1 })}
-              spoken={`${weight(step.weightG)}, ${t('calc.rampReps', { n: step.reps })}`}
-              value={`${weight(step.weightG)} × ${step.reps}`}
+        <View style={styles.block}>
+          <SectionHeader style={styles.header} title={t('calc.converter')} />
+          <Card style={styles.card}>
+            <View style={styles.chips}>
+              {(['kg', 'lb'] as const).map((u) => (
+                <Chip
+                  accessibilityLabel={`${t('calc.converter')}: ${u}`}
+                  key={u}
+                  label={u}
+                  onPress={() => setConvFrom(u)}
+                  selected={convFrom === u}
+                />
+              ))}
+            </View>
+            <Field
+              label={t('calc.converter')}
+              onChangeText={setConvValue}
+              suffix={convFrom}
+              value={convValue}
             />
-          ))}
-        </Card>
+            <OutRow
+              label={t('calc.result')}
+              value={
+                convG === null ? EMPTY : `${convertFormat.format(gToUnit(convG, convTo))} ${convTo}`
+              }
+            />
+          </Card>
+        </View>
 
-        <Card style={styles.card}>
-          <Text accessibilityRole="header" role="headline">
-            {t('calc.converter')}
-          </Text>
-          <View style={styles.chips}>
-            {(['kg', 'lb'] as const).map((u) => (
-              <Chip
-                accessibilityLabel={`${t('calc.converter')}: ${u}`}
-                key={u}
-                label={u}
-                onPress={() => setConvFrom(u)}
-                selected={convFrom === u}
-              />
-            ))}
-          </View>
-          <Field
-            label={t('calc.converter')}
-            onChangeText={setConvValue}
-            suffix={convFrom}
-            value={convValue}
-          />
-          <OutRow
-            label={t('calc.result')}
-            value={
-              convG === null ? EMPTY : `${convertFormat.format(gToUnit(convG, convTo))} ${convTo}`
-            }
-          />
-        </Card>
-
-        <Card style={styles.card}>
-          <Text accessibilityRole="header" role="headline">
-            {`${t('calc.wilks')} / ${t('calc.dots')}`}
-          </Text>
-          <Field label={t('calc.total')} onChangeText={setTotal} suffix={unit} value={total} />
-          {sex === null ? (
-            <Text color="secondary" role="footnote">
-              {t('calc.needsSex')}
-            </Text>
-          ) : null}
-          {bodyweightG === null ? (
-            // La otra falta se arregla en Ajustes, que es de donde se llega acá; esta no.
-            <PressableScale
-              accessibilityLabel={t('calc.needsBodyweight')}
-              accessibilityRole="link"
-              onPress={() => router.push('/body')}
-              style={styles.link}
-            >
-              <Text color="tint" role="footnote">
-                {t('calc.needsBodyweight')}
+        <View style={styles.block}>
+          <SectionHeader style={styles.header} title={`${t('calc.wilks')} / ${t('calc.dots')}`} />
+          <Card style={styles.card}>
+            <Field label={t('calc.total')} onChangeText={setTotal} suffix={unit} value={total} />
+            {sex === null ? (
+              <Text color="secondary" role="footnote">
+                {t('calc.needsSex')}
               </Text>
-            </PressableScale>
-          ) : (
-            <Text color="secondary" role="footnote">
-              {`${t('body.kinds.bodyweight')}: ${weight(bodyweightG)}`}
-            </Text>
-          )}
-          {points ? (
-            <>
-              <OutRow label={t('calc.wilks')} value={pointsFormat.format(points.wilks)} />
-              <OutRow label={t('calc.dots')} value={pointsFormat.format(points.dots)} />
-            </>
-          ) : null}
-        </Card>
+            ) : null}
+            {bodyweightG === null ? (
+              // La otra falta se arregla en Ajustes, que es de donde se llega acá; esta no.
+              <PressableScale
+                accessibilityLabel={t('calc.needsBodyweight')}
+                accessibilityRole="link"
+                onPress={() => router.push('/body')}
+                style={styles.link}
+              >
+                <Text color="tint" role="footnote">
+                  {t('calc.needsBodyweight')}
+                </Text>
+              </PressableScale>
+            ) : (
+              <Text color="secondary" role="footnote">
+                {`${t('body.kinds.bodyweight')}: ${weight(bodyweightG)}`}
+              </Text>
+            )}
+          </Card>
+          <Bento.Row>
+            <Tile
+              entering={stagger(1)}
+              title={t('calc.wilks')}
+              value={points === null ? EMPTY : pointsFormat.format(points.wilks)}
+            />
+            <Tile
+              entering={stagger(2)}
+              title={t('calc.dots')}
+              value={points === null ? EMPTY : pointsFormat.format(points.dots)}
+            />
+          </Bento.Row>
+        </View>
       </ScrollView>
     </>
   )

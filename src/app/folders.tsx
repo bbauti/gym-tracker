@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router'
 import { useState } from 'react'
 import type { AccessibilityActionEvent } from 'react-native'
-import { StyleSheet, TextInput, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import Animated, { useAnimatedRef } from 'react-native-reanimated'
 import {
   createFolder,
@@ -16,13 +16,14 @@ import {
 import { useQuery } from '@/db/useQuery'
 import { plural, t } from '@/i18n'
 import { haptic } from '@/ui/haptics'
+import Input from '@/ui/Input'
 import ListRow from '@/ui/ListRow'
 import { useEnterFade } from '@/ui/motion'
 import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, radius, spacing } from '@/ui/tokens'
 
 // `routine` también: mover una rutina a una carpeta desde el menú de la rutina cambia el conteo, y
 // borrar una carpeta suelta las que tenía adentro.
@@ -37,19 +38,13 @@ const styles = StyleSheet.create({
   content: { padding: spacing[4] },
   // El hueco entre filas vive adentro del ítem: el que levantás se lleva su hueco (ui/Sortable.tsx).
   rowSlot: { paddingBottom: spacing[2] },
-  rowCard: { borderRadius: radius.md, overflow: 'hidden' },
+  // Mismo radio que el recorte de SwipeRow: la fila de "nueva" cierra la lista sin cambiar de forma.
+  rowCard: { borderRadius: radius.sm, overflow: 'hidden' },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   hideSeparator: { marginBottom: -StyleSheet.hairlineWidth },
-  row: { alignItems: 'center', flexDirection: 'row', gap: spacing[2], paddingRight: spacing[4] },
-  name: {
-    color: colors.label,
-    flex: 1,
-    fontSize: 17,
-    lineHeight: 22,
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-  },
+  // El campo tiene fondo propio (ui/Input): el hueco lo pone la fila, no el padding del texto.
+  row: { alignItems: 'center', flexDirection: 'row', gap: spacing[2], padding: spacing[2] },
+  name: { flex: 1 },
 })
 
 /**
@@ -105,7 +100,7 @@ function FolderRow({
   return (
     <SwipeRow onDelete={remove}>
       <View style={styles.row}>
-        <TextInput
+        <Input
           accessibilityActions={[...a11y.accessibilityActions, DELETE_ACTION]}
           // El valor del campo es el nombre: la etiqueta dice qué es, no lo repite.
           accessibilityLabel={t('folders.name')}
@@ -119,7 +114,6 @@ function FolderRow({
           onSubmitEditing={commit}
           onChangeText={setName}
           placeholder={t('folders.placeholder')}
-          placeholderTextColor={colors.tertiaryLabel}
           returnKeyType="done"
           // Recién creada entra con el nombre por defecto seleccionado: escribir lo reemplaza.
           selectTextOnFocus={selectAll}

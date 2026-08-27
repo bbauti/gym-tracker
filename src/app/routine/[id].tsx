@@ -1,5 +1,4 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { Alert, StyleSheet, View } from 'react-native'
 import Animated, { useAnimatedRef } from 'react-native-reanimated'
 import { shareJsonFile } from '@/db/backup'
@@ -19,19 +18,23 @@ import { getActiveSessionId } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
 import { plural, t } from '@/i18n'
 import { ensureNotificationPermission } from '@/notifications'
+import Badge from '@/ui/Badge'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import ListRow from '@/ui/ListRow'
 import Menu, { type MenuItem } from '@/ui/Menu'
 import { useEnterFade } from '@/ui/motion'
+import SectionHeader from '@/ui/SectionHeader'
 import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import Stepper from '@/ui/Stepper'
-import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, radius, spacing } from '@/ui/tokens'
 
 type DayEntry = RoutineTree['days'][number]
+/** Las dos marcas de un día. El tono es el dato: azul lo que sigue, ámbar el aviso. */
+type Mark = { label: string; tone: 'tint' | 'warning' }
 
 const ROUTINE_TABLES = ['routine', 'routine_day', 'routine_exercise', 'routine_set']
 const SESSION_TABLES = ['session']
@@ -50,29 +53,16 @@ const styles = StyleSheet.create({
   start: { paddingBottom: spacing[4] },
   weeks: { marginBottom: spacing[4] },
   weekGroup: { paddingBottom: spacing[4] },
-  weekTitle: {
-    letterSpacing: 0.4,
-    paddingBottom: spacing[2],
-    paddingHorizontal: spacing[2],
-    textTransform: 'uppercase',
-  },
+  weekTitle: { paddingBottom: spacing[2], paddingHorizontal: spacing[2] },
   // El hueco entre filas vive adentro del ítem: el que levantás se lleva su hueco (ui/Sortable.tsx).
   rowSlot: { paddingBottom: spacing[2] },
-  rowCard: { borderRadius: radius.md, overflow: 'hidden' },
-  hideSeparator: { marginBottom: -StyleSheet.hairlineWidth },
+  // La fila trae su propio padding: la card acá es solo la superficie. `overflow` recorta el fondo
+  // de la fila al radio — con `boxShadow` RN mueve el clip a un contenedor y la sombra no se corta.
+  rowCard: { borderRadius: radius.lg, overflow: 'hidden', padding: 0 },
+  // Dos hairlines y no uno: la card levantada trae su propio borde (`outline`), así que el
+  // separador de la fila tiene que caer fuera TAMBIÉN de él o se pinta encima del borde de abajo.
+  hideSeparator: { marginBottom: -StyleSheet.hairlineWidth * 2 },
   badges: { alignItems: 'center', flexDirection: 'row', gap: spacing[1] },
-  badge: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-  },
-  more: {
-    alignItems: 'center',
-    minHeight: MIN_TARGET,
-    justifyContent: 'center',
-    width: MIN_TARGET,
-  },
 })
 
 /** El índice guardado puede quedar fuera de rango (se borró un día): siempre da una posición real. */
@@ -82,17 +72,6 @@ function wrap(index: number, count: number): number {
 }
 
 const keyOfDay = (item: DayEntry) => String(item.day.id)
-
-/** Etiqueta chiquita y NO tocable: `ui/Chip` es un control (pide onPress y vibra al tocarlo). */
-function Badge({ label }: { label: string }) {
-  return (
-    <View style={styles.badge}>
-      <Text color="tint" role="caption">
-        {label}
-      </Text>
-    </View>
-  )
-}
 
 export default function RoutineScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -178,21 +157,22 @@ export default function RoutineScreen() {
       ),
       plural(setCount, t('day.sets.one', { n: setCount }), t('day.sets.other', { n: setCount })),
     ].join(' · ')
-    const marks = [
+    const marks: Mark[] = [
       // Por id y no por posición: con semanas la lista se dibuja partida en grupos.
-      item.day.id === nextDay?.id ? t('routine.next') : null,
-      item.day.isDeload ? t('day.deload') : null,
-    ].filter((s) => s !== null)
+      item.day.id === nextDay?.id ? { label: t('routine.next'), tone: 'tint' as const } : null,
+      // Ámbar y no tint: el deload es un aviso sobre el día, no la acción que sigue.
+      item.day.isDeload ? { label: t('day.deload'), tone: 'warning' as const } : null,
+    ].filter((m) => m !== null)
     return (
       // Entra con FadeIn el día recién agregado; la lista no se anima al reordenar
       // (de eso se ocupa el sortable con sus propios springs).
       <Animated.View entering={fadeIn(item.day.id)} style={styles.rowSlot}>
-        <View style={styles.rowCard}>
+        <Card style={styles.rowCard} variant="raised">
           <View style={styles.hideSeparator}>
             <ListRow
               {...a11y}
               chevron
-              label={[item.day.name, ...marks, subtitle].join(', ')}
+              label={[item.day.name, ...marks.map((m) => m.label), subtitle].join(', ')}
               onPress={() =>
                 router.push({ params: { id: item.day.id }, pathname: '/routine-day/[id]' })
               }
@@ -201,15 +181,15 @@ export default function RoutineScreen() {
               trailing={
                 marks.length > 0 ? (
                   <View style={styles.badges}>
-                    {marks.map((label) => (
-                      <Badge key={label} label={label} />
+                    {marks.map((mark) => (
+                      <Badge key={mark.label} label={mark.label} tone={mark.tone} />
                     ))}
                   </View>
                 ) : null
               }
             />
           </View>
-        </View>
+        </Card>
       </Animated.View>
     )
   }
@@ -227,7 +207,8 @@ export default function RoutineScreen() {
             scrollableRef={scrollRef}
           />
         ) : null}
-        <View style={styles.rowCard}>
+        {/* Plana: agregar no es un día, es lo que queda al final de la lista. */}
+        <Card style={styles.rowCard}>
           <View style={styles.hideSeparator}>
             <ListRow
               chevron
@@ -247,7 +228,7 @@ export default function RoutineScreen() {
               title={t('routine.addDay')}
             />
           </View>
-        </View>
+        </Card>
       </>
     )
   }
@@ -258,26 +239,14 @@ export default function RoutineScreen() {
         options={{
           headerRight: () => (
             <Menu items={MENU} onSelect={onMenu}>
-              <View
-                accessible
-                accessibilityLabel={t('common.more')}
-                accessibilityRole="button"
-                style={styles.more}
-              >
-                <SymbolView
-                  fallback={
-                    <Text color="tint" role="title">
-                      ⋯
-                    </Text>
-                  }
-                  name={{
-                    ios: 'ellipsis.circle' as SFSymbol,
-                    android: 'more_horiz' as AndroidSymbol,
-                  }}
-                  size={22}
-                  tintColor={colors.tint}
-                />
-              </View>
+              <IconButton
+                asMenuTrigger
+                fallback="⋯"
+                label={t('common.more')}
+                md="more_horiz"
+                sf="ellipsis.circle"
+                tint="tint"
+              />
             </Menu>
           ),
           title: name,
@@ -297,6 +266,9 @@ export default function RoutineScreen() {
                 lista las terminadas). Acá no hay card de "Continuar" como en la tab, así que el
                 botón no se apaga: se convierte en ella y lleva al entrenamiento que está abierto. */}
             <Button
+              // El golpe es `sessionStart` (Medium) y sale abajo: el `buttonPrimary` del hero
+              // saldría en el mismo tick y el portón de 50 ms de `haptic()` dejaría solo el Light.
+              haptics={false}
               onPress={() => {
                 void ensureNotificationPermission()
                 // La base y no `activeId`: `useQuery` difiere la invalidación un `setTimeout(0)`
@@ -305,6 +277,8 @@ export default function RoutineScreen() {
                 // del historial. Leído en el momento, el segundo toque entra a la que se acaba de
                 // crear, que es lo mismo que hace el título cuando ya hay una abierta.
                 const sessionId = getActiveSessionId() ?? startSessionFromDay(nextDay.id)
+                // En el mismo bloque que el push (§7.4): el golpe es el arranque, no el toque.
+                haptic('sessionStart')
                 router.push({ params: { id: sessionId }, pathname: '/session/[id]' })
               }}
               title={
@@ -312,7 +286,7 @@ export default function RoutineScreen() {
                   ? t('routine.start', { day: nextDay.name })
                   : t('session.continue')
               }
-              variant={activeId === null ? 'filled' : 'tinted'}
+              variant={activeId === null ? 'hero' : 'tinted'}
             />
           </View>
         ) : null}
@@ -333,14 +307,10 @@ export default function RoutineScreen() {
           ? weekDays(days, null)
           : byWeek.map(({ list, week }) => (
               <View key={week} style={styles.weekGroup}>
-                <Text
-                  accessibilityRole="header"
-                  color="secondary"
-                  role="footnote"
+                <SectionHeader
                   style={styles.weekTitle}
-                >
-                  {t('routine.week', { n: week + 1 })}
-                </Text>
+                  title={t('routine.week', { n: week + 1 })}
+                />
                 {weekDays(list, week)}
               </View>
             ))}

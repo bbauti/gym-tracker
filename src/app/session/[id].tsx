@@ -4,7 +4,6 @@ import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
 import { Alert, AppState, Dimensions, StyleSheet, View } from 'react-native'
 import Animated, {
-  FadeIn,
   useAnimatedRef,
   useAnimatedStyle,
   useScrollViewOffset,
@@ -67,12 +66,15 @@ import {
   showSessionNotification,
 } from '@/notifications'
 import { MAX_CARD_EXERCISES, shareSession } from '@/share'
+import Badge from '@/ui/Badge'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
+import { celebration } from '@/ui/Celebration'
 import EmptyState from '@/ui/EmptyState'
 import { haptic } from '@/ui/haptics'
+import IconButton from '@/ui/IconButton'
 import Menu, { type MenuItem, showMenu } from '@/ui/Menu'
-import { RowLayout, Spring, Timing, useEnterFade } from '@/ui/motion'
+import { RowLayout, Spring, useEnterFade } from '@/ui/motion'
 import NumPad from '@/ui/NumPad'
 import PressableScale from '@/ui/PressableScale'
 import RestTimer, { useNow } from '@/ui/RestTimer'
@@ -81,7 +83,7 @@ import Sortable, { type ReorderActions } from '@/ui/Sortable'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, opacity, radius, spacing } from '@/ui/tokens'
 
 const SESSION_TABLES = ['session', 'session_exercise', 'set_entry', 'exercise']
 const SETTINGS_TABLES = ['settings']
@@ -102,8 +104,6 @@ const PAD_GUESS = 400
 const SCREEN_H = Dimensions.get('window').height
 /** Lo que tiene que quedar libre bajo el dedo al enfocar: la fila entera (56) y un respiro. */
 const ROW_CLEARANCE = 56 + spacing[4]
-/** El pie de la card aparece al terminar el ejercicio: entra, no parpadea (§7.6). */
-const CTA_FADE = FadeIn.duration(Timing.fast.duration).easing(Timing.fast.easing)
 // El orden es el mismo criterio que en `SET_MENU`: primero lo que más se usa (ver ui/Menu.tsx).
 const EXERCISE_MENU: MenuItem[] = [
   { key: 'note', label: t('session.exerciseMenu.note'), md: 'edit_note', sf: 'square.and.pencil' },
@@ -112,6 +112,8 @@ const EXERCISE_MENU: MenuItem[] = [
     label: t('session.exerciseMenu.warmup'),
     md: 'local_fire_department',
     sf: 'flame',
+    // Sin peso de trabajo el handler dispara `error`, y el tic del menú se lo comería (gate global).
+    skipTick: true,
   },
   {
     key: 'feedback',
@@ -156,13 +158,15 @@ const styles = StyleSheet.create({
   empty: { marginBottom: spacing[4], minHeight: 240 },
   // Mismo aviso que en el editor del día (app/routine-day/[id].tsx), acá arriba de los ejercicios.
   deload: {
-    backgroundColor: colors.fill,
     borderRadius: radius.md,
-    gap: spacing[1],
+    borderCurve: 'continuous',
+    gap: spacing[2],
     marginBottom: spacing[4],
     overflow: 'hidden',
     padding: spacing[3],
   },
+  // El lavado va como capa: ningún `colors.*` acepta alpha (son PlatformColor), igual que en Badge.
+  deloadWash: { backgroundColor: colors.warning, opacity: opacity.wash },
   card: { gap: spacing[2] },
   cardHeader: { alignItems: 'center', flexDirection: 'row', gap: spacing[2] },
   cardTitle: { flex: 1 },
@@ -187,13 +191,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing[2],
     paddingBottom: spacing[3],
-  },
-  paused: {
-    backgroundColor: colors.fill,
-    borderRadius: radius.sm,
-    overflow: 'hidden',
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[1] / 2,
   },
 })
 
@@ -699,7 +696,7 @@ export default function SessionScreen() {
     // Tier 1 y nada más (§7.5): la pastilla de la fila y un aviso. Sin confetti, y una sola vez por
     // serie — destildar y volver a tildar reproduce el récord en la base, pero no es un récord nuevo.
     const celebrate = kinds.length > 0 && !prKinds.has(setId)
-    haptic(celebrate ? 'success' : last ? 'exerciseDone' : 'setComplete')
+    haptic(celebrate ? 'pr' : last ? 'exerciseDone' : 'setComplete')
     // Sin toast: el tier 1 es la pastilla de la fila y el háptico, nada más. Un toast acá además
     // pisaba el de deshacer de un borrado (`Toast` muestra uno solo a la vez, el nuevo reemplaza al
     // viejo), y con eso la única celebración de la app se comía la única forma de recuperar datos.
@@ -894,7 +891,17 @@ export default function SessionScreen() {
         t('session.finishConfirm.action'),
         false,
         () => {
-          haptic('success')
+          // La celebración se dispara ANTES de irse: vive en el host raíz (ui/Celebration), así que
+          // sobrevive al `router.back()` de dos líneas más abajo.
+          haptic('finish')
+          celebration.show({
+            // Récords, no series: una serie que rompe peso + e1rm cuenta dos. Son los que se
+            // rompieron con esta pantalla abierta (`prKinds` no sobrevive a salir y volver), y por
+            // eso el badge se esconde en 0 en vez de decir "0 récords".
+            prs: [...prKinds.values()].reduce((n, kinds) => n + kinds.length, 0),
+            subtitle: t('celebration.subtitle'),
+            title: t('celebration.title'),
+          })
           endSession(sessionId)
           cancelRestEnd().catch(() => {})
           dismissSessionNotification().catch(() => {})
@@ -929,7 +936,7 @@ export default function SessionScreen() {
           md: paused ? 'play_arrow' : 'pause',
           sf: paused ? 'play.circle' : 'pause.circle',
         },
-        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
+        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', skipTick: true, sf: 'pencil' },
         { key: 'share', label: t('session.menu.share'), md: 'share', sf: 'square.and.arrow.up' },
         {
           destructive: true,
@@ -942,7 +949,7 @@ export default function SessionScreen() {
     : [
         // Terminado, compartir es lo primero que se hace con el entrenamiento.
         { key: 'share', label: t('session.menu.share'), md: 'share', sf: 'square.and.arrow.up' },
-        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', sf: 'pencil' },
+        { key: 'edit', label: t('sessionEdit.title'), md: 'edit', skipTick: true, sf: 'pencil' },
         { destructive: true, key: 'discard', label: t('common.delete'), md: 'delete', sf: 'trash' },
       ]
 
@@ -952,26 +959,14 @@ export default function SessionScreen() {
         options={{
           headerRight: () => (
             <Menu items={headerItems} onSelect={handleHeaderMenu}>
-              <View
-                accessible
-                accessibilityLabel={t('common.more')}
-                accessibilityRole="button"
-                style={styles.more}
-              >
-                <SymbolView
-                  fallback={
-                    <Text color="tint" role="title">
-                      ⋯
-                    </Text>
-                  }
-                  name={{
-                    ios: 'ellipsis.circle' as SFSymbol,
-                    android: 'more_horiz' as AndroidSymbol,
-                  }}
-                  size={22}
-                  tintColor={colors.tint}
-                />
-              </View>
+              <IconButton
+                asMenuTrigger
+                fallback="⋯"
+                label={t('common.more')}
+                md="more_horiz"
+                sf="ellipsis.circle"
+                tint="tint"
+              />
             </Menu>
           ),
           title: row.name ?? t('session.untitled'),
@@ -1000,9 +995,8 @@ export default function SessionScreen() {
         />
         {deload ? (
           <View style={styles.deload}>
-            <Text color="tint" role="headline">
-              {t('day.deload')}
-            </Text>
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.deloadWash]} />
+            <Badge label={t('day.deload')} size="md" tone="warning" />
             <Text color="secondary" role="footnote">
               {t('day.deloadHint')}
             </Text>
@@ -1126,11 +1120,7 @@ function SessionElapsed({ startedAt, pausedMs, pausedAt, endedAt }: ElapsedProps
       >
         {time}
       </Text>
-      {pausedAt === null ? null : (
-        <Text color="secondary" role="caption" style={styles.paused}>
-          {t('session.paused')}
-        </Text>
-      )}
+      {pausedAt === null ? null : <Badge label={t('session.paused')} />}
     </View>
   )
 }
@@ -1198,7 +1188,7 @@ function ExerciseCard({
   const ordinals = ordinalsOf(sets)
 
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} variant="raised">
       <View style={styles.cardHeader}>
         <View style={styles.cardTitle}>
           <PressableScale
@@ -1211,6 +1201,8 @@ function ExerciseCard({
             </Text>
           </PressableScale>
         </View>
+        {/* A mano y no `ui/IconButton`: las acciones de reordenar (`a11y`) tienen que ir en el
+            elemento accesible, y el trigger del IconButton no reenvía props. */}
         <Menu items={EXERCISE_MENU} onSelect={(key) => onMenu(se.id, key)}>
           <View
             {...a11y}
@@ -1243,19 +1235,19 @@ function ExerciseCard({
         </Text>
       ) : null}
       <View style={styles.columns}>
-        <Text color="secondary" role="caption" style={styles.colBadge}>
+        <Text color="secondary" role="overline" style={styles.colBadge}>
           #
         </Text>
-        <Text color="secondary" numberOfLines={1} role="caption" style={styles.colPrev}>
+        <Text color="secondary" numberOfLines={1} role="overline" style={styles.colPrev}>
           {t('session.prevLabel')}
         </Text>
         {fields.map((f) => (
-          <Text color="secondary" key={f} numberOfLines={1} role="caption" style={styles.colField}>
+          <Text color="secondary" key={f} numberOfLines={1} role="overline" style={styles.colField}>
             {fieldLabel(f, settings.unit)}
           </Text>
         ))}
         {extra ? (
-          <Text color="secondary" numberOfLines={1} role="caption" style={styles.colField}>
+          <Text color="secondary" numberOfLines={1} role="overline" style={styles.colField}>
             {fieldLabel(extra, settings.unit)}
           </Text>
         ) : null}
@@ -1302,7 +1294,7 @@ function ExerciseCard({
       {askFeedback ? (
         // Igual que las filas: el pie del ejercicio que ya estaba terminado al abrir no anima —
         // solo el que se termina con la pantalla abierta.
-        <Animated.View entering={ctaFade(se.id) ? CTA_FADE : undefined}>
+        <Animated.View entering={ctaFade(se.id)}>
           <PressableScale
             accessibilityLabel={`${t('feedback.cta')}, ${name}`}
             accessibilityRole="button"

@@ -2,22 +2,18 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { Stack } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { AccessibilityInfo, AppState, ScrollView, StyleSheet, View } from 'react-native'
-import Animated, {
-  Easing,
-  ReduceMotion,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated'
+import { Easing, ReduceMotion, useSharedValue, withTiming } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { type TKey, t } from '@/i18n'
 import { type IntervalPhase, PREP_MS, phaseAt } from '@/lib/intervals'
 import { formatDuration } from '@/lib/units'
 import { cancelScheduled, INTERVALS_CHANNEL_ID, scheduleAt } from '@/notifications'
+import BigNumber from '@/ui/BigNumber'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import { haptic } from '@/ui/haptics'
 import { useNow } from '@/ui/RestTimer'
+import Ring from '@/ui/Ring'
 import Stepper from '@/ui/Stepper'
 import Text from '@/ui/Text'
 import { colors, spacing } from '@/ui/tokens'
@@ -25,7 +21,9 @@ import { colors, spacing } from '@/ui/tokens'
 const KEEP_AWAKE_TAG = 'gym-intervals'
 /** Id fijo: hay un solo intervalo a la vez y así se cancela aunque el proceso se haya muerto. */
 const NOTIFICATION_ID = 'intervals-phase'
-const TRACK_HEIGHT = 6
+/** El anillo ES el reloj: ocupa el ancho útil de la card y el numeral vive adentro. */
+const RING_SIZE = 220
+const RING_STROKE = 12
 
 const PHASE_LABEL: Record<IntervalPhase, TKey> = {
   prep: 'intervals.prep',
@@ -37,18 +35,11 @@ const PHASE_LABEL: Record<IntervalPhase, TKey> = {
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.groupedBackground, flex: 1 },
   content: { gap: spacing[4], padding: spacing[4] },
-  timer: { alignItems: 'center', gap: spacing[3] },
-  readout: { alignItems: 'center', alignSelf: 'stretch', gap: spacing[1] },
-  count: { fontSize: 64, lineHeight: 72 },
-  track: {
-    alignSelf: 'stretch',
-    backgroundColor: colors.fill,
-    borderRadius: TRACK_HEIGHT / 2,
-    height: TRACK_HEIGHT,
-    overflow: 'hidden',
-  },
-  // scaleX y no width: el ancho animado pasa por layout en cada frame (§7.5).
-  fill: { backgroundColor: colors.tint, height: '100%', transformOrigin: 'left', width: '100%' },
+  timer: { alignItems: 'center' },
+  readout: { alignItems: 'center', gap: spacing[3] },
+  phase: { textTransform: 'uppercase' },
+  // Tope contra el que `adjustsFontSizeToFit` achica: con Dynamic Type el numeral no toca el arco.
+  count: { maxWidth: RING_SIZE - spacing[6] },
   config: { gap: spacing[2] },
   locked: { opacity: 0.4 },
   footer: { flexDirection: 'row', gap: spacing[3], paddingHorizontal: spacing[4] },
@@ -91,6 +82,7 @@ export default function IntervalsScreen() {
   const countdown = phase === 'prep' ? String(seconds) : formatDuration(seconds * 1000)
   const phaseLabel = t(PHASE_LABEL[phase])
   const roundLabel = t('intervals.round', { round, total: rounds })
+  const readout = `${phaseLabel}, ${countdown}, ${roundLabel}`
 
   // Qué toca cuando termine esta fase: se lo pregunto a `phaseAt` en el instante del cambio en vez
   // de repetir las reglas (con descanso en 0 encadena trabajo, y la última ronda no descansa).
@@ -125,7 +117,7 @@ export default function IntervalsScreen() {
   // C12: un háptico por cada número de la cuenta atrás. Lo dispara `seconds` porque ES el número
   // que se ve — en preparación nunca es cero: en el cero ya cambió la fase.
   useEffect(() => {
-    if (running && phase === 'prep' && seconds > 0) haptic('selection')
+    if (running && phase === 'prep' && seconds > 0) haptic('tick')
   }, [running, phase, seconds])
 
   // Cada cambio de fase: háptico y el anuncio a mano, en las dos plataformas — es el único que se
@@ -162,8 +154,8 @@ export default function IntervalsScreen() {
     }
   }, [running])
 
-  // La barra vive en el UI thread: se apunta a la fracción real y se vacía lineal hasta el final de
-  // la fase. `reduceMotion` explícito porque acá la animación ES el dato (§7.2), y el `set` crudo de
+  // El anillo vive en el UI thread: se apunta a la fracción real y se vacía lineal hasta el final
+  // de la fase. `reduceMotion` explícito porque acá la animación ES el dato (§7.2), y el `set` crudo de
   // antes corta la herencia del `withTiming` anterior (ver ui/RestTimer).
   useEffect(() => {
     if (startedAt === null || totalMs <= 0) {
@@ -196,8 +188,6 @@ export default function IntervalsScreen() {
     return () => sub.remove()
   }, [pausedAt, phaseEndsAt, progress, startedAt, totalMs])
 
-  const fill = useAnimatedStyle(() => ({ transform: [{ scaleX: progress.get() }] }))
-
   const primary = finished || startedAt === null ? start : paused ? resume : pause
   const primaryTitle = t(
     finished || startedAt === null
@@ -218,29 +208,26 @@ export default function IntervalsScreen() {
               —mismo criterio que ui/RestTimer—. Los cambios de fase los anuncia el efecto de
               `marker`. */}
           <View
-            accessibilityLabel={`${phaseLabel}, ${countdown}, ${roundLabel}`}
+            accessibilityLabel={readout}
             accessibilityLiveRegion={phase === 'prep' ? 'polite' : 'none'}
             accessible
             style={styles.readout}
           >
-            <Text color="secondary" role="headline">
+            <Text color="secondary" role="overline" style={styles.phase}>
               {phaseLabel}
             </Text>
-            <Text
-              adjustsFontSizeToFit
-              numberOfLines={1}
-              role="largeTitle"
-              style={styles.count}
-              tabular
-            >
-              {countdown}
-            </Text>
+            {/* El anillo y el numeral ya se dicen en la etiqueta de arriba: sin esto TalkBack los
+                vuelve a leer como dos paradas más (en Android `accessible` no tapa a los hijos). */}
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              {/* El SharedValue pasa derecho: acá la animación ES el dato y el efecto de abajo ya
+                  lo cronometra contra el reloj con `ReduceMotion.Never` (§12.7). */}
+              <Ring label={readout} progress={progress} size={RING_SIZE} stroke={RING_STROKE}>
+                <BigNumber align="center" style={styles.count} value={countdown} />
+              </Ring>
+            </View>
             <Text color="secondary" role="footnote" tabular>
               {roundLabel}
             </Text>
-          </View>
-          <View style={styles.track}>
-            <Animated.View style={[styles.fill, fill]} />
           </View>
         </Card>
         {/* Corriendo o en pausa la config no se toca (cambiarla movería la fase bajo los pies), y
@@ -293,12 +280,11 @@ export default function IntervalsScreen() {
       </ScrollView>
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing[4] }]}>
         <View style={styles.grow}>
-          <Button onPress={primary} title={primaryTitle} />
+          <Button onPress={primary} title={primaryTitle} variant="hero" />
         </View>
+        {/* Sin fondo no se gana la mitad del ancho: al lado del hero ocupa lo que dice. */}
         {startedAt !== null ? (
-          <View style={styles.grow}>
-            <Button destructive onPress={stop} title={t('intervals.stop')} variant="tinted" />
-          </View>
+          <Button destructive onPress={stop} title={t('intervals.stop')} variant="plain" />
         ) : null}
       </View>
     </View>

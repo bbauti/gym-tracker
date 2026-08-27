@@ -7,9 +7,10 @@ import { scheduleOnRN } from 'react-native-worklets'
 import type { Field, NumKey } from '@/db/types'
 import { locale, t } from '@/i18n'
 import type { Unit } from '@/lib/units'
+import GradientSurface from './GradientSurface'
 import { Spring } from './motion'
 import Text from './Text'
-import { colors, radius, spacing } from './tokens'
+import { colors, Press, radius, shadow, spacing } from './tokens'
 
 type Props = {
   field: Field
@@ -30,7 +31,9 @@ const DECIMAL_SEPARATOR = locale === 'es' ? ',' : '.'
 
 const styles = StyleSheet.create({
   pad: {
-    backgroundColor: colors.background,
+    // El fondo del teclado es el agrupado y no `background`: las teclas de dígito son la superficie
+    // clara de arriba (§12.3) y sobre blanco no se separarían.
+    backgroundColor: colors.groupedBackground,
     borderTopColor: colors.separator,
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: GAP,
@@ -40,15 +43,18 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: GAP },
   key: {
     alignItems: 'center',
-    backgroundColor: colors.fill,
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     flex: 1,
     justifyContent: 'center',
     minHeight: KEY_HEIGHT,
     paddingHorizontal: spacing[1],
     paddingVertical: spacing[2],
   },
-  accent: { backgroundColor: colors.tint },
+  digit: { backgroundColor: colors.secondaryGroupedBackground, ...shadow.card },
+  fn: { backgroundColor: colors.fill },
+  // El degradado se dibuja adentro y lo recorta el radio de la tecla.
+  accent: { overflow: 'hidden' },
   onAccent: { color: colors.onTint },
   spacer: { flex: 1, minHeight: KEY_HEIGHT },
 })
@@ -56,6 +62,7 @@ const styles = StyleSheet.create({
 type KeyProps = {
   k: NumKey
   label?: string
+  /** Dígito: tipografía grande y superficie propia. Las funciones van en `fill`. */
   big?: boolean
   sf?: string
   md?: string
@@ -77,7 +84,7 @@ function Key({ k, label, big, sf, md, a11y, accent, onKey }: KeyProps) {
     .maxDuration(HOLD_MS)
     .maxDistance(SLIDE_OFF)
     .onBegin(() => {
-      pressed.set(withSpring(0.96, Spring.press))
+      pressed.set(withSpring(Press.key, Spring.press))
     })
     .onEnd(() => {
       scheduleOnRN(onKey, k)
@@ -105,8 +112,9 @@ function Key({ k, label, big, sf, md, a11y, accent, onKey }: KeyProps) {
         accessible
         // VoiceOver activa con un tap sintético que no siempre llega al gesto nativo.
         onAccessibilityTap={() => onKey(k)}
-        style={[styles.key, accent && styles.accent, animated]}
+        style={[styles.key, big ? styles.digit : styles.fn, accent && styles.accent, animated]}
       >
+        {accent ? <GradientSurface style={StyleSheet.absoluteFill} /> : null}
         {sf ? (
           <SymbolView
             fallback={text}

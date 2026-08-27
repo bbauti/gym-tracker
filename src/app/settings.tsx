@@ -19,10 +19,12 @@ import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
 import { defaultIncrementG } from '@/lib/units'
 import { available, availableSync } from '@/lock'
+import Card from '@/ui/Card'
 import { type HapticEvent, haptic } from '@/ui/haptics'
 import ListRow from '@/ui/ListRow'
 import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
+import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
@@ -34,14 +36,10 @@ const styles = StyleSheet.create({
   content: { paddingVertical: spacing[4], paddingHorizontal: spacing[4] },
   sections: { gap: spacing[5] },
   dimmed: { opacity: 0.7 },
-  sectionTitle: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    paddingHorizontal: spacing[2],
-    paddingBottom: spacing[2],
-  },
+  sectionHeader: { paddingHorizontal: spacing[2], paddingBottom: spacing[2] },
   sectionFooter: { paddingHorizontal: spacing[2], paddingTop: spacing[2] },
-  group: { borderRadius: radius.md, overflow: 'hidden' },
+  // El grupo es una Card plana: el fondo y el recorte los pone ella, el padding lo pone cada fila.
+  group: { borderRadius: radius.md, overflow: 'hidden', padding: 0 },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   lastRow: { marginBottom: -StyleSheet.hairlineWidth },
   rowBox: { paddingLeft: spacing[4], backgroundColor: colors.secondaryGroupedBackground },
@@ -104,19 +102,12 @@ function Section({
   const last = Children.count(children) - 1
   return (
     <View>
-      <Text
-        accessibilityRole="header"
-        color="secondary"
-        role="footnote"
-        style={styles.sectionTitle}
-      >
-        {title}
-      </Text>
-      <View style={styles.group}>
+      <SectionHeader style={styles.sectionHeader} title={title} />
+      <Card style={styles.group}>
         {Children.map(children, (child, i) => (
           <View style={i === last ? styles.lastRow : null}>{child}</View>
         ))}
-      </View>
+      </Card>
       {footer ? (
         <Text color="secondary" role="footnote" style={styles.sectionFooter}>
           {footer}
@@ -179,7 +170,10 @@ function PickerRow({
   )
 }
 
-/** El Switch mide 51×31: el área tocable es la fila entera, y el switch va sin eventos propios. */
+/**
+ * El Switch mide 51×31: el área tocable es la fila entera (`ListRow`, 44 pt) y el switch va sin
+ * eventos propios, como la vista del estado.
+ */
 function SwitchRow({
   label,
   value,
@@ -195,25 +189,28 @@ function SwitchRow({
   hint?: string
 }) {
   return (
-    <PressableScale
-      accessibilityHint={hint}
-      accessibilityLabel={label}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: value, disabled: Boolean(disabled) }}
-      disabled={disabled}
-      onPress={() => onChange(!value)}
-      scale={0.98}
-      style={styles.rowBox}
-    >
-      <View style={[styles.prefRow, disabled ? styles.dimmed : null]}>
-        <Text numberOfLines={1} style={styles.rowLabel}>
-          {label}
-        </Text>
-        <View pointerEvents="none">
-          <Switch disabled={disabled} value={value} />
-        </View>
-      </View>
-    </PressableScale>
+    <View style={disabled ? styles.dimmed : null}>
+      <ListRow
+        accessibilityRole="switch"
+        accessibilityState={{ checked: value, disabled: Boolean(disabled) }}
+        label={[label, disabled ? hint : null].filter(Boolean).join(', ')}
+        onPress={
+          disabled
+            ? undefined
+            : () => {
+                // Antes de escribir: apagarlos deja un último tic de confirmación (§7.4).
+                haptic(value ? 'toggleOff' : 'toggle')
+                onChange(!value)
+              }
+        }
+        title={label}
+        trailing={
+          <View pointerEvents="none">
+            <Switch disabled={disabled} value={value} />
+          </View>
+        }
+      />
+    </View>
   )
 }
 
@@ -391,11 +388,7 @@ export default function SettingsScreen() {
         >
           <SwitchRow
             label={t('settings.haptics')}
-            onChange={(haptics) => {
-              // Antes de escribir: apagarlos deja un último tic de confirmación (§7.4).
-              haptic('toggle')
-              updateSettings({ haptics })
-            }}
+            onChange={(haptics) => updateSettings({ haptics })}
             value={settings.haptics}
           />
           <PickerRow
@@ -436,10 +429,7 @@ export default function SettingsScreen() {
             disabled={!lockReady}
             hint={lockReady === false ? t('settings.appLockUnavailable') : undefined}
             label={t('settings.appLock')}
-            onChange={(appLock) => {
-              haptic('toggle')
-              updateSettings({ appLock })
-            }}
+            onChange={(appLock) => updateSettings({ appLock })}
             value={settings.appLock}
           />
         </Section>

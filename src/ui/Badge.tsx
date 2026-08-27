@@ -48,7 +48,12 @@ export default function Badge({ label, tone = 'neutral', size = 'sm' }: Props) {
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, styles.wash, { backgroundColor: WASH[tone] }]}
       />
-      <Text role={size === 'sm' ? 'caption' : 'label'} style={{ color: FG[tone] }}>
+      {/* Una pastilla es una palabra: en una fila que se encoge trunca, nunca crece a dos líneas. */}
+      <Text
+        numberOfLines={1}
+        role={size === 'sm' ? 'caption' : 'label'}
+        style={{ color: FG[tone] }}
+      >
         {label}
       </Text>
     </View>

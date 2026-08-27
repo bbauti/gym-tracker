@@ -2,7 +2,7 @@ import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { router, useLocalSearchParams } from 'expo-router'
 import { SymbolView } from 'expo-symbols'
 import { useEffect, useRef, useState } from 'react'
-import { StyleSheet, TextInput, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import {
   type Exercise,
@@ -16,10 +16,11 @@ import { addRoutineExercise } from '@/db/queries/routines'
 import { addExercise, getSessionExercise, swapExercise } from '@/db/queries/session'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import Input from '@/ui/Input'
 import { KAV_ENABLED, useSheetBottomInset } from '@/ui/keyboard'
 import ListRow from '@/ui/ListRow'
-import PressableScale from '@/ui/PressableScale'
-import Text from '@/ui/Text'
+import SectionHeader from '@/ui/SectionHeader'
+import SheetHeader from '@/ui/SheetHeader'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 const RECENTS = 8
@@ -35,16 +36,7 @@ type Row =
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
-  head: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[4],
-    paddingBottom: spacing[3],
-  },
-  cancel: { paddingHorizontal: spacing[2], paddingVertical: spacing[1] },
+  head: { paddingHorizontal: spacing[4], paddingTop: spacing[4], paddingBottom: spacing[3] },
   field: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -54,22 +46,18 @@ const styles = StyleSheet.create({
     marginBottom: spacing[3],
     paddingHorizontal: spacing[3],
     borderRadius: radius.md,
+    borderCurve: 'continuous',
     backgroundColor: colors.fill,
   },
+  // El campo es la fila entera, porque la lupa va adentro: el Input pone tipografía, placeholder y
+  // Dynamic Type, y el fondo lo pone el contenedor (si no, se pintan dos veces). El borde NO se
+  // pisa: el `style` va último en ui/Input y dejarlo transparente mataba el hairline del foco.
   input: {
     flex: 1,
-    paddingVertical: spacing[2],
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
   },
-  section: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[4],
-    paddingBottom: spacing[2],
-  },
+  section: { paddingHorizontal: spacing[4], paddingTop: spacing[4], paddingBottom: spacing[2] },
 })
 
 const subtitle = (e: Exercise) =>
@@ -162,12 +150,7 @@ export default function PickExerciseScreen() {
   }
 
   const renderItem = ({ item }: { item: Row }) => {
-    if (item.kind === 'header')
-      return (
-        <Text accessibilityRole="header" color="secondary" role="footnote" style={styles.section}>
-          {item.title}
-        </Text>
-      )
+    if (item.kind === 'header') return <SectionHeader style={styles.section} title={item.title} />
     if (item.kind === 'create')
       return (
         <ListRow
@@ -196,18 +179,10 @@ export default function PickExerciseScreen() {
       style={styles.screen}
     >
       <View style={styles.head}>
-        <Text accessibilityRole="header" role="headline">
-          {seId ? t('pick.swap') : t('pick.title')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('common.cancel')}
-          onPress={() => router.back()}
-          style={styles.cancel}
-        >
-          <Text color="tint" role="headline">
-            {t('common.cancel')}
-          </Text>
-        </PressableScale>
+        <SheetHeader
+          onCancel={() => router.back()}
+          title={seId ? t('pick.swap') : t('pick.title')}
+        />
       </View>
 
       {/* headerSearchBarOptions es del header nativo del Stack y acá no hay header: campo propio. */}
@@ -218,17 +193,15 @@ export default function PickExerciseScreen() {
           size={16}
           tintColor={colors.secondaryLabel}
         />
-        <TextInput
+        <Input
           accessibilityLabel={t('pick.search')}
           autoCapitalize="none"
           autoCorrect={false}
           autoFocus
           // ponytail: el botón de limpiar es el nativo de iOS. Techo: en Android se borra a mano.
           clearButtonMode="while-editing"
-          maxFontSizeMultiplier={1.6}
           onChangeText={setQ}
           placeholder={t('pick.search')}
-          placeholderTextColor={colors.tertiaryLabel}
           returnKeyType="search"
           style={styles.input}
           value={q}

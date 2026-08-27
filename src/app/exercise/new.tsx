@@ -1,24 +1,30 @@
 import { router, useLocalSearchParams } from 'expo-router'
 import { type AndroidSymbol, type SFSymbol, SymbolView } from 'expo-symbols'
 import { useState } from 'react'
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { createExercise } from '@/db/queries/exercises'
 import { EQUIPMENT, type Equipment, METRICS, type Metric, MUSCLES, type Muscle } from '@/db/schema'
 import { t } from '@/i18n'
+import { haptic } from '@/ui/haptics'
+import Input from '@/ui/Input'
 import { useAndroidKeyboardHeight } from '@/ui/keyboard'
 import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
+import SheetHeader, { sheetStyles } from '@/ui/SheetHeader'
 import Text from '@/ui/Text'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, MIN_TARGET, opacity, radius, spacing } from '@/ui/tokens'
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.groupedBackground },
-  content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[6] },
-  bar: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], minHeight: MIN_TARGET },
-  barTitle: { flex: 1, textAlign: 'center' },
-  barAction: { paddingVertical: spacing[2], minWidth: 64 },
-  right: { textAlign: 'right' },
-  disabled: { opacity: 0.4 },
+  screen: { flex: 1, backgroundColor: colors.background },
+  // Mismo target que las acciones de `SheetHeader`, que es con quien se alinea.
+  action: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: MIN_TARGET,
+    minWidth: MIN_TARGET,
+    paddingHorizontal: spacing[2],
+  },
+  disabled: { opacity: opacity.disabled },
   // El fondo del grupo pinta los separadores: un gap de hairline entre filas opacas.
   group: {
     borderRadius: radius.md,
@@ -26,6 +32,7 @@ const styles = StyleSheet.create({
     gap: StyleSheet.hairlineWidth,
     backgroundColor: colors.separator,
   },
+  // Un tono sobre el fondo llano de la hoja: `secondaryGrouped` es blanco sobre blanco en light.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -33,18 +40,9 @@ const styles = StyleSheet.create({
     minHeight: MIN_TARGET,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2],
-    backgroundColor: colors.secondaryGroupedBackground,
+    backgroundColor: colors.tertiaryGroupedBackground,
   },
   rowLabel: { flex: 1 },
-  name: {
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
-    backgroundColor: colors.secondaryGroupedBackground,
-  },
 })
 
 /** El trigger del Menu no es un Pressable: el menú nativo necesita el tap para abrirse. */
@@ -120,57 +118,52 @@ export default function NewExerciseScreen() {
       equipment,
       metric,
     })
-    // Sin háptico: es un botón común y el sheet que se cierra ya es el feedback (§7.4).
     router.back()
   }
 
   return (
     <ScrollView
-      contentContainerStyle={[styles.content, { paddingBottom: spacing[6] + keyboard }]}
+      contentContainerStyle={[sheetStyles.sheet, { paddingBottom: spacing[6] + keyboard }]}
       keyboardShouldPersistTaps="handled"
       style={styles.screen}
     >
-      {/* El sheet no tiene header: la barra propia es lo único que puede cerrarlo con VoiceOver,
-          y deja "Crear" arriba del teclado sin pelear con él. */}
-      <View style={styles.bar}>
-        <PressableScale
-          accessibilityLabel={t('common.cancel')}
-          onPress={() => router.back()}
-          style={styles.barAction}
-        >
-          <Text color="tint">{t('common.cancel')}</Text>
-        </PressableScale>
-        <Text numberOfLines={1} role="headline" style={styles.barTitle}>
-          {t('exercise.new.title')}
-        </Text>
-        <PressableScale
-          accessibilityLabel={t('exercise.new.create')}
-          accessibilityState={{ disabled: !trimmed }}
-          disabled={!trimmed}
-          onPress={create}
-          style={[styles.barAction, !trimmed && styles.disabled]}
-        >
-          <Text color="tint" role="headline" style={styles.right}>
-            {t('exercise.new.create')}
-          </Text>
-        </PressableScale>
-      </View>
+      {/* La hoja no trae header de sistema: este es lo único que la cierra con VoiceOver, y deja
+          "Crear" arriba del teclado sin pelear con él. "Crear" va como `trailing` y no como
+          `onDone` porque es la única acción de la app que se apaga sola: sin nombre no hay nada que
+          crear, y un botón inerte que no se anuncia deshabilitado es peor que uno gris. */}
+      <SheetHeader
+        onCancel={() => router.back()}
+        title={t('exercise.new.title')}
+        trailing={
+          <PressableScale
+            accessibilityLabel={t('exercise.new.create')}
+            accessibilityState={{ disabled: !trimmed }}
+            disabled={!trimmed}
+            onPress={() => {
+              // Mismo Soft que el "Cancelar" de al lado: lo que se siente es la hoja cerrándose.
+              haptic('sheetClose')
+              create()
+            }}
+            style={[styles.action, !trimmed && styles.disabled]}
+          >
+            <Text color="tint" numberOfLines={1} role="headline">
+              {t('exercise.new.create')}
+            </Text>
+          </PressableScale>
+        }
+      />
 
-      <View style={styles.group}>
-        <TextInput
-          accessibilityLabel={t('exercise.new.name')}
-          autoCapitalize="sentences"
-          autoCorrect={false}
-          autoFocus
-          onChangeText={setName}
-          onSubmitEditing={create}
-          placeholder={t('exercise.new.name')}
-          placeholderTextColor={colors.tertiaryLabel}
-          returnKeyType="done"
-          style={styles.name}
-          value={name}
-        />
-      </View>
+      <Input
+        accessibilityLabel={t('exercise.new.name')}
+        autoCapitalize="sentences"
+        autoCorrect={false}
+        autoFocus
+        onChangeText={setName}
+        onSubmitEditing={create}
+        placeholder={t('exercise.new.name')}
+        returnKeyType="done"
+        value={name}
+      />
 
       <View style={styles.group}>
         <PickerRow

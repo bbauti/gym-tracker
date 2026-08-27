@@ -41,7 +41,7 @@ const A11Y_ACTIONS = [{ label: t('common.delete'), name: 'delete' }]
 const styles = StyleSheet.create({
   // El radio va acá (con overflow hidden) para que la zona destructiva de atrás no asome en esquina
   // cuadrada por debajo de una fila redondeada.
-  wrap: { borderRadius: radius.sm, overflow: 'hidden' },
+  wrap: { borderRadius: radius.lg, overflow: 'hidden' },
   action: {
     ...StyleSheet.absoluteFill,
     alignItems: 'flex-end',
@@ -137,7 +137,7 @@ export default function SwipeRow({ children, onDelete, enabled = true }: Props) 
             fallback={<Text style={styles.fallbackIcon}>✕</Text>}
             name={{ ios: 'trash.fill' as SFSymbol, android: 'delete' as AndroidSymbol }}
             size={22}
-            tintColor="#FFFFFF"
+            tintColor={colors.onTint}
           />
         </Animated.View>
       </Animated.View>

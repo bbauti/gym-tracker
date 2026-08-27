@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
-import { Keyboard, ScrollView, StyleSheet, TextInput, View } from 'react-native'
+import { Keyboard, ScrollView, StyleSheet, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import Animated from 'react-native-reanimated'
 import {
@@ -15,15 +15,18 @@ import {
 import { getSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
 import { locale, t } from '@/i18n'
+import BigNumber from '@/ui/BigNumber'
 import Button from '@/ui/Button'
 import Card from '@/ui/Card'
 import { haptic } from '@/ui/haptics'
+import Input from '@/ui/Input'
+import ListRow from '@/ui/ListRow'
 import MetricChart, { formatMetric, metricUnit, parseMetric, toDisplay } from '@/ui/MetricChart'
 import { RowLayout, useEnterFade } from '@/ui/motion'
 import SwipeRow from '@/ui/SwipeRow'
 import Text from '@/ui/Text'
 import { toast } from '@/ui/Toast'
-import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
+import { colors, radius, spacing } from '@/ui/tokens'
 
 /** La ventana del gráfico (I02). La lista de abajo no la usa: lo viejo se tiene que poder borrar. */
 const DAYS = 90
@@ -34,27 +37,19 @@ const dayFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' })
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
   content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[6] },
+  // El numeral y su curva son una sola cosa: el gap los junta sin línea de por medio.
+  hero: { gap: spacing[3] },
   form: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  input: {
-    flex: 1,
-    minHeight: MIN_TARGET,
-    borderRadius: radius.md,
-    backgroundColor: colors.fill,
-    paddingHorizontal: spacing[3],
-    fontSize: 17,
-    lineHeight: 22,
-    color: colors.label,
-    fontVariant: ['tabular-nums'],
+  input: { flex: 1, fontVariant: ['tabular-nums'] },
+  // Las filas se recortan solas (ui/SwipeRow): el grupo pone el fondo abajo para que las esquinas
+  // de cada una no dejen ver el gris de la pantalla, y el mismo radio para que el corte coincida.
+  group: {
+    backgroundColor: colors.secondaryGroupedBackground,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
   },
-  list: { gap: spacing[2] },
-  entry: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    minHeight: MIN_TARGET,
-    paddingHorizontal: spacing[2],
-  },
-  value: { flex: 1 },
+  // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
+  lastRow: { marginBottom: -StyleSheet.hairlineWidth },
 })
 
 /** I02/I03. Una medida: su curva, el alta de hoy y todo lo anotado. */
@@ -115,6 +110,9 @@ export default function BodyMetricScreen() {
     })
   }
 
+  // `history` viene de la más nueva a la más vieja: la primera es la que va arriba en grande.
+  const latest = data.entries[0]
+
   return (
     <KeyboardAvoidingView automaticOffset behavior="padding" style={styles.screen}>
       <Stack.Screen options={{ title: name }} />
@@ -125,26 +123,31 @@ export default function BodyMetricScreen() {
         // esto el primer toque con el teclado abierto se lo come la ScrollView para cerrarlo.
         keyboardShouldPersistTaps="handled"
       >
-        {points.length >= 2 ? (
-          <Card>
-            <MetricChart
-              data={points}
-              label={chartLabel(data.chart)}
-              unit={metricUnit(kind, unit)}
+        {latest ? (
+          <Card style={styles.hero} variant="raised">
+            <BigNumber
+              label={dayFormat.format(new Date(latest.measuredAt))}
+              role="displaySmall"
+              value={formatMetric(kind, latest.value, unit)}
             />
+            {points.length >= 2 ? (
+              <MetricChart
+                data={points}
+                label={chartLabel(data.chart)}
+                unit={metricUnit(kind, unit)}
+              />
+            ) : null}
           </Card>
         ) : null}
 
         <Card>
           <View style={styles.form}>
-            <TextInput
+            <Input
               accessibilityLabel={`${name}, ${metricUnit(kind, unit)}`}
               inputMode="decimal"
               keyboardType="decimal-pad"
-              maxFontSizeMultiplier={1.6}
               onChangeText={setText}
               placeholder={metricUnit(kind, unit)}
-              placeholderTextColor={colors.tertiaryLabel}
               returnKeyType="done"
               style={styles.input}
               value={text}
@@ -156,27 +159,35 @@ export default function BodyMetricScreen() {
         {data.entries.length === 0 ? (
           <Text color="secondary">{t('body.empty')}</Text>
         ) : (
-          <Card style={styles.list}>
-            {data.entries.map((row) => (
-              // El hueco que deja una medida borrada lo cierra RowLayout.
-              <Animated.View entering={fadeIn(row.id)} key={row.id} layout={RowLayout}>
-                <SwipeRow onDelete={() => remove(row)}>
-                  <View
-                    accessible
-                    accessibilityLabel={`${formatMetric(kind, row.value, unit)}, ${dayFormat.format(new Date(row.measuredAt))}`}
-                    style={styles.entry}
-                  >
-                    <Text style={styles.value} tabular>
-                      {formatMetric(kind, row.value, unit)}
-                    </Text>
-                    <Text color="secondary" role="footnote">
-                      {dayFormat.format(new Date(row.measuredAt))}
-                    </Text>
-                  </View>
-                </SwipeRow>
-              </Animated.View>
-            ))}
-          </Card>
+          <View style={styles.group}>
+            {data.entries.map((row, i) => {
+              const value = formatMetric(kind, row.value, unit)
+              const day = dayFormat.format(new Date(row.measuredAt))
+              return (
+                // El hueco que deja una medida borrada lo cierra RowLayout.
+                <Animated.View
+                  entering={fadeIn(row.id)}
+                  key={row.id}
+                  layout={RowLayout}
+                  style={i === data.entries.length - 1 ? styles.lastRow : null}
+                >
+                  <SwipeRow onDelete={() => remove(row)}>
+                    {/* El valor manda y va a la derecha, tabular: la columna de números se lee de
+                        arriba abajo sin que las comas bailen. */}
+                    <ListRow
+                      label={`${value}, ${day}`}
+                      title={day}
+                      trailing={
+                        <Text role="headline" tabular>
+                          {value}
+                        </Text>
+                      }
+                    />
+                  </SwipeRow>
+                </Animated.View>
+              )
+            })}
+          </View>
         )}
       </ScrollView>
     </KeyboardAvoidingView>

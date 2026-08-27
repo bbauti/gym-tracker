@@ -7,7 +7,7 @@ import { locale, t } from '@/i18n'
 import ListRow from '@/ui/ListRow'
 import { formatMetric } from '@/ui/MetricChart'
 import Text from '@/ui/Text'
-import { colors, radius, spacing } from '@/ui/tokens'
+import { colors, outline, radius, shadow, spacing } from '@/ui/tokens'
 
 const EMPTY = '—'
 const dayFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' })
@@ -15,7 +15,13 @@ const dayFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' })
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.groupedBackground },
   content: { padding: spacing[4] },
-  group: { borderRadius: radius.md, overflow: 'hidden' },
+  // Levantado (§12.5): el fondo va acá para que la sombra tenga contra qué dibujarse, y el hairline
+  // es lo que separa el grupo del fondo en dark, donde la sombra desaparece.
+  group: {
+    backgroundColor: colors.secondaryGroupedBackground,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+  },
   // El separador de la última fila cae fuera del recorte del grupo: ListRow lo dibuja siempre.
   lastRow: { marginBottom: -StyleSheet.hairlineWidth },
 })
@@ -33,7 +39,7 @@ export default function BodyScreen() {
         contentInsetAdjustmentBehavior="automatic"
         style={styles.screen}
       >
-        <View style={styles.group}>
+        <View style={[styles.group, shadow.card, outline]}>
           {BODY_KINDS.map((kind, i) => {
             const row = rows[kind]
             const name = t(`body.kinds.${kind}`)
