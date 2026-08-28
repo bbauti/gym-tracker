@@ -49,6 +49,7 @@ export function addSet(seId: number): number {
         targetRepsMin: prev?.targetRepsMin ?? null,
         targetRepsMax: prev?.targetRepsMax ?? null,
         suggestedWeightG: prev?.suggestedWeightG ?? null,
+        suggestedReps: prev?.suggestedReps ?? null,
       })
       .returning({ id: setEntry.id })
       .get().id

@@ -147,14 +147,15 @@ export function shareSession(card: SessionCard): Promise<void> {
     })
     write(canvas, card.date, PAD, 132, { color: PALETTE.secondary, font: font(17), max: inner })
 
-    // Tres columnas de ancho fijo: los valores arrancan alineados aunque uno sea "0:45" y otro
-    // "12.480 kg". El separador de abajo cierra el bloque de cabecera.
+    // Columnas del mismo ancho, tantas como stats vengan (3 sin récords, 4 con ellos): los valores
+    // arrancan alineados aunque uno sea "0:45" y otro "12.480 kg". El separador cierra la cabecera.
     const column = inner / card.stats.length
     card.stats.forEach((stat, i) => {
       const x = PAD + column * i
       write(canvas, stat.value, x, 208, {
         color: PALETTE.label,
-        font: font(30, 'bold'),
+        // Con cuatro columnas (sesión con récord) un volumen de cinco cifras no entra a 30.
+        font: font(card.stats.length > 3 ? 24 : 30, 'bold'),
         max: column - 8,
       })
       write(canvas, stat.label, x, 236, {

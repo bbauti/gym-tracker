@@ -140,12 +140,13 @@ test('a full session at the same weight suggests the next rung up', () => {
   history(BENCH, at(17), [{ weightG: 60_000 }, { weightG: 60_000 }])
   history(BENCH, at(24), [{ weightG: 60_000 }, { weightG: 60_000 }])
 
-  // Sin objetivo: repetir las repeticiones de la vez pasada al mismo peso alcanza (E01).
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'linear', weightG: 62_500 })
+  // Sin objetivo: repetir las repeticiones de la vez pasada al mismo peso alcanza (E01). Y sin
+  // rango tampoco hay repeticiones que ofrecer.
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'linear', reps: null, weightG: 62_500 })
 
   // El incremento del ejercicio le gana al de ajustes.
   sqlite.query('UPDATE exercise SET default_increment_g = 5000 WHERE id = ?').run(BENCH)
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'linear', weightG: 65_000 })
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'linear', reps: null, weightG: 65_000 })
 
   // La sesión que se está entrenando no se sugiere a sí misma.
   const today = history(BENCH, at(26), [{ weightG: 80_000 }])
@@ -158,18 +159,30 @@ test('double progression waits for the top of the range', () => {
     { reps: 12, targetRepsMax: 12, targetRepsMin: 8, weightG: 60_000 },
     { reps: 10, targetRepsMax: 12, targetRepsMin: 8, weightG: 60_000 },
   ])
-  // El rango que pedía la sesión anterior viaja en la fila: nadie tiene que pasarlo.
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', weightG: 60_000 })
+  // El rango que pedía la sesión anterior viaja en la fila: nadie tiene que pasarlo. La serie más
+  // floja hizo 10, así que el objetivo de hoy es el escalón siguiente al mismo peso.
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', reps: 12, weightG: 60_000 })
 
-  // Con las dos series arriba del rango, sube.
+  // Con las dos series arriba del rango, sube el peso — y las repeticiones vuelven al mínimo.
   sqlite.query('UPDATE set_entry SET reps = 12').run()
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', weightG: 62_500 })
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', reps: 8, weightG: 62_500 })
 
-  // Y el objetivo que manda es el que pasa la rutina de hoy, no el de ayer.
+  // Y el objetivo que manda es el que pasa la rutina de hoy, no el de ayer: 12–15 son 12, 13 y 15.
   expect(suggestFor(db, BENCH, { targetRepsMax: 15, targetRepsMin: 12 })).toEqual({
     reason: 'double',
+    reps: 13,
     weightG: 60_000,
   })
+})
+
+test('the rep target climbs the range and resets when the weight goes up', () => {
+  // 8 al mismo peso: la próxima son 10, que es el escalón del medio de 8–12.
+  history(BENCH, at(24), [{ reps: 8, targetRepsMax: 12, targetRepsMin: 8, weightG: 60_000 }])
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', reps: 10, weightG: 60_000 })
+
+  // Y en el tope del rango sube el peso, con el objetivo de vuelta en el mínimo.
+  sqlite.query('UPDATE set_entry SET reps = 12').run()
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', reps: 8, weightG: 62_500 })
 })
 
 test('the rep target comes from the first set of the day, not from a back-off', () => {
@@ -178,7 +191,7 @@ test('the rep target comes from the first set of the day, not from a back-off', 
     { reps: 12, targetRepsMax: 12, targetRepsMin: 8, weightG: 60_000 },
   ])
   // Manda el 5-5 de arriba: leyendo el back-off de 8-12 la sugerencia se quedaría en 100 kg.
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', weightG: 102_500 })
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'double', reps: 5, weightG: 102_500 })
 })
 
 test('a warm-up never becomes the suggested weight', () => {
@@ -189,7 +202,7 @@ test('a warm-up never becomes the suggested weight', () => {
   expect(suggestFor(db, BENCH).weightG).toBe(60_000)
   // Y una sesión que fue toda entrada en calor no existe para la sugerencia.
   history(ROW, at(25), [{ kind: 'warmup', reps: 10, weightG: 40_000 }])
-  expect(suggestFor(db, ROW)).toEqual({ reason: 'none', weightG: null })
+  expect(suggestFor(db, ROW)).toEqual({ reason: 'none', reps: null, weightG: null })
 })
 
 test('three sessions without a better estimated 1RM are a stall', () => {
@@ -200,7 +213,7 @@ test('three sessions without a better estimated 1RM are a stall', () => {
   history(BENCH, at(24), [{ reps: 5, weightG: 100_000 }])
   expect(isStalled(BENCH)).toBe(true)
   // Estancado: 10% abajo, redondeado al incremento (100 × 0,9 = 90).
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'stall', weightG: 90_000 })
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'stall', reps: null, weightG: 90_000 })
 
   // Una repetición más rompe el empate.
   sqlite.query('UPDATE set_entry SET reps = 6 WHERE completed_at = ?').run(at(24))
@@ -252,7 +265,7 @@ test('deload advice arrives when half of what you train is stalled, and can be s
   expect(state.active).toBe(true)
   expect(state.advise).toBe(false)
   expect(state.until).not.toBeNull()
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'deload', weightG: 60_000 })
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'deload', reps: null, weightG: 60_000 })
 
   // Que se venza solo (nadie toca "Terminar") lo apaga y calla las mismas tres semanas.
   sqlite.query('UPDATE settings SET deload_until = ? WHERE id = 1').run(WED - DAY)
@@ -274,7 +287,8 @@ test('feedback is saved on the exercise and holds the weight back', () => {
 
   setFeedback(seId, { difficulty: 3, pump: 2 })
   expect(workSetHistory(BENCH)[0].feedback).toEqual({ difficulty: 3, pump: 2 })
-  expect(suggestFor(db, BENCH)).toEqual({ reason: 'feedback_hard', weightG: 60_000 })
+  // El peso se queda quieto y las 12 ya eran el tope del rango: se vuelven a pedir.
+  expect(suggestFor(db, BENCH)).toEqual({ reason: 'feedback_hard', reps: 12, weightG: 60_000 })
 
   setFeedback(seId, null)
   expect(workSetHistory(BENCH)[0].feedback).toBeNull()

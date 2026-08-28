@@ -35,37 +35,44 @@ const opts = (extra: Partial<SuggestOptions> = {}): SuggestOptions => ({
 })
 
 test('no history suggests nothing at all', () => {
-  expect(suggest([], opts())).toEqual({ reason: 'none', weightG: null })
+  expect(suggest([], opts())).toEqual({ reason: 'none', reps: null, weightG: null })
   // Una sesión de peso corporal tampoco da un peso que ofrecer.
-  expect(suggest([session(0, [set(null, 12)])], opts())).toEqual({ reason: 'none', weightG: null })
+  expect(suggest([session(0, [set(null, 12)])], opts())).toEqual({
+    reason: 'none',
+    reps: null,
+    weightG: null,
+  })
 })
 
 test('one session with nothing to compare against repeats the top weight', () => {
   expect(suggest([session(0, [set(60_000, 8), set(60_000, 7)])], opts())).toEqual({
     reason: 'repeat',
+    reps: null,
     weightG: 60_000,
   })
 })
 
 test('linear progression without targets needs last time as the bar', () => {
   const history = [session(2 * DAY, [set(60_000, 8)]), session(0, [set(60_000, 8)])]
-  expect(suggest(history, opts())).toEqual({ reason: 'linear', weightG: 62_500 })
+  expect(suggest(history, opts())).toEqual({ reason: 'linear', reps: null, weightG: 62_500 })
 
   // Menos repeticiones al mismo peso: no se sube nada.
   expect(
     suggest([session(2 * DAY, [set(60_000, 6)]), session(0, [set(60_000, 8)])], opts()),
-  ).toEqual({ reason: 'repeat', weightG: 60_000 })
+  ).toEqual({ reason: 'repeat', reps: null, weightG: 60_000 })
 
   // Bajar de peso tampoco es progresar, por más repeticiones que hayas hecho.
   expect(
     suggest([session(2 * DAY, [set(50_000, 12)]), session(0, [set(60_000, 8)])], opts()),
-  ).toEqual({ reason: 'repeat', weightG: 50_000 })
+  ).toEqual({ reason: 'repeat', reps: null, weightG: 50_000 })
 })
 
 test('a single target counts as linear when every set reaches it', () => {
   const sets = [set(80_000, 5), set(80_000, 5)]
+  // Un objetivo de un número solo es un rango de un escalón: al subir el peso vuelve a pedir 5.
   expect(suggest([session(0, sets)], opts({ targetRepsMin: 5 }))).toEqual({
     reason: 'linear',
+    reps: 5,
     weightG: 82_500,
   })
 })
@@ -74,6 +81,7 @@ test('double progression only adds weight at the top of the range', () => {
   const top = [set(60_000, 12), set(60_000, 12)]
   expect(suggest([session(0, top)], opts({ targetRepsMax: 12, targetRepsMin: 8 }))).toEqual({
     reason: 'double',
+    reps: 8,
     weightG: 62_500,
   })
 
@@ -81,46 +89,64 @@ test('double progression only adds weight at the top of the range', () => {
   const inside = [set(60_000, 12), set(60_000, 10)]
   expect(suggest([session(0, inside)], opts({ targetRepsMax: 12, targetRepsMin: 8 }))).toEqual({
     reason: 'double',
+    reps: 12,
     weightG: 60_000,
   })
 })
 
 test('the range of the previous session survives when nobody passes one', () => {
   const sets = [set(60_000, 12, { targetRepsMax: 12, targetRepsMin: 8 })]
-  expect(suggest([session(0, sets)], opts())).toEqual({ reason: 'double', weightG: 62_500 })
+  expect(suggest([session(0, sets)], opts())).toEqual({
+    reason: 'double',
+    reps: 8,
+    weightG: 62_500,
+  })
 })
 
 test('RPE autoregulation moves two increments up and one nowhere', () => {
   const easy = [set(60_000, 8, { rpe: 6 }), set(60_000, 8, { rpe: 6.5 })]
-  expect(suggest([session(0, easy)], opts())).toEqual({ reason: 'rpe_easy', weightG: 65_000 })
+  expect(suggest([session(0, easy)], opts())).toEqual({
+    reason: 'rpe_easy',
+    reps: null,
+    weightG: 65_000,
+  })
 
   // RIR es la misma escala dada vuelta: 4 en la recámara son 6 de RPE.
   const rir = [set(60_000, 8, { rir: 4 })]
   expect(suggest([session(0, rir)], opts({ rpeMode: 'rir' }))).toEqual({
     reason: 'rpe_easy',
+    reps: null,
     weightG: 65_000,
   })
 
   // Con un objetivo más bajo, ese mismo 6 ya no sobra.
   expect(suggest([session(0, easy)], opts({ targetRpe: 7 }))).toEqual({
     reason: 'repeat',
+    reps: null,
     weightG: 60_000,
   })
 
   const hard = [set(60_000, 5, { rpe: 10 }), set(60_000, 5, { rpe: 9 })]
-  expect(suggest([session(0, hard)], opts())).toEqual({ reason: 'rpe_hard', weightG: 60_000 })
+  expect(suggest([session(0, hard)], opts())).toEqual({
+    reason: 'rpe_hard',
+    reps: null,
+    weightG: 60_000,
+  })
 
   // Con el esfuerzo apagado en ajustes, el RPE anotado no manda nada.
   expect(suggest([session(0, easy)], opts({ rpeMode: 'none' }))).toEqual({
     reason: 'repeat',
+    reps: null,
     weightG: 60_000,
   })
 })
 
 test('missing the target reps is a hard session even without RPE', () => {
   const sets = [set(60_000, 12), set(60_000, 6)]
+  // Quedarse corto deja el peso quieto y el objetivo en el mínimo del rango.
   expect(suggest([session(0, sets)], opts({ targetRepsMax: 12, targetRepsMin: 8 }))).toEqual({
     reason: 'rpe_hard',
+    reps: 8,
     weightG: 60_000,
   })
 })
@@ -128,17 +154,21 @@ test('missing the target reps is a hard session even without RPE', () => {
 test('feedback overrides a weight bump', () => {
   const sets = [set(60_000, 12)]
   const range = opts({ targetRepsMax: 12, targetRepsMin: 8 })
+  // El peso no se mueve, y las 12 ya eran el tope: se vuelven a pedir.
   expect(suggest([session(0, sets, { difficulty: 3 })], range)).toEqual({
     reason: 'feedback_hard',
+    reps: 12,
     weightG: 60_000,
   })
   expect(suggest([session(0, sets, { pain: 1 })], range)).toEqual({
     reason: 'feedback_hard',
+    reps: 12,
     weightG: 60_000,
   })
   // Un buen bombeo no frena nada.
   expect(suggest([session(0, sets, { pump: 3 })], range)).toEqual({
     reason: 'double',
+    reps: 8,
     weightG: 62_500,
   })
 })
@@ -151,10 +181,79 @@ test('a stall backs off 10%, and a deload beats everything', () => {
   ]
   expect(detectStall(flat)).toBe(true)
   // 60 × 0,9 = 54 kg, redondeado al múltiplo de 2,5 más cercano.
-  expect(suggest(flat, opts())).toEqual({ reason: 'stall', weightG: 55_000 })
+  expect(suggest(flat, opts())).toEqual({ reason: 'stall', reps: null, weightG: 55_000 })
 
   // El deload manda incluso sobre el estancamiento: 60 × 0,6 = 36 kg.
-  expect(suggest(flat, opts({ deload: true }))).toEqual({ reason: 'deload', weightG: 35_000 })
+  expect(suggest(flat, opts({ deload: true }))).toEqual({
+    reason: 'deload',
+    reps: null,
+    weightG: 35_000,
+  })
+})
+
+const range = (min: number, max: number) => opts({ targetRepsMax: max, targetRepsMin: min })
+/** El objetivo de reps de una sesión pasada al mismo peso, con la rutina pidiendo `min`–`max`. */
+const repsAfter = (reps: number[], min: number, max: number) => {
+  const sets = reps.map((r) => set(60_000, r))
+  return suggest([session(0, sets)], range(min, max)).reps
+}
+
+test('the rep target climbs the min/mid/max ladder while the weight stays put', () => {
+  // 8–12 son 8, 10 y 12: cada sesión completa pide el escalón siguiente.
+  expect(repsAfter([8, 8], 8, 12)).toBe(10)
+  expect(repsAfter([10, 10], 8, 12)).toBe(12)
+  // Arriba del tope el peso ya sube (y el objetivo vuelve al mínimo); si no, se repite el tope.
+  expect(suggest([session(0, [set(60_000, 12), set(60_000, 12)])], range(8, 12))).toEqual({
+    reason: 'double',
+    reps: 8,
+    weightG: 62_500,
+  })
+
+  // El escalón del medio se redondea para abajo: 10–15 son 10, 12 y 15; 4–6 son 4, 5 y 6.
+  expect(repsAfter([10], 10, 15)).toBe(12)
+  expect(repsAfter([12], 10, 15)).toBe(15)
+  expect(repsAfter([4], 4, 6)).toBe(5)
+  expect(repsAfter([5], 4, 6)).toBe(6)
+  // 8–15 no tiene un medio redondo: 8, 11 y 15.
+  expect(repsAfter([8], 8, 15)).toBe(11)
+  expect(repsAfter([11], 8, 15)).toBe(15)
+})
+
+test('the lowest set of the session is the one that has to reach the rung', () => {
+  // Una serie floja frena a las tres: el objetivo sale de ella, no de la mejor.
+  expect(repsAfter([12, 10, 8], 8, 12)).toBe(10)
+  expect(repsAfter([12, 12, 10], 8, 12)).toBe(12)
+  // Una sesión sin series no es historial: no hay peso que ofrecer ni objetivo que pedir.
+  expect(repsAfter([], 8, 12)).toBe(null)
+  // Anotar solo el peso no da escalón desde el cual seguir: se vuelve a pedir el mínimo.
+  expect(suggest([session(0, [set(60_000, null)])], range(8, 12)).reps).toBe(8)
+})
+
+test('the rep target resets to the minimum whenever the weight moves', () => {
+  const flat = [
+    session(4 * DAY, [set(60_000, 10)]),
+    session(2 * DAY, [set(60_000, 10)]),
+    session(0, [set(60_000, 10)]),
+  ]
+  // Estancado (peso abajo) y deload (más abajo todavía) arrancan el rango de nuevo.
+  expect(suggest(flat, range(8, 12))).toEqual({ reason: 'stall', reps: 8, weightG: 55_000 })
+  expect(suggest(flat, opts({ deload: true, targetRepsMax: 12, targetRepsMin: 8 }))).toEqual({
+    reason: 'deload',
+    reps: 8,
+    weightG: 35_000,
+  })
+  // Y una sesión fácil, que sube dos incrementos, también.
+  expect(suggest([session(0, [set(60_000, 10, { rpe: 6 })])], range(8, 12))).toEqual({
+    reason: 'rpe_easy',
+    reps: 8,
+    weightG: 65_000,
+  })
+})
+
+test('without a range there is nothing to aim at', () => {
+  expect(suggest([session(0, [set(60_000, 8)])], opts()).reps).toBe(null)
+  // Sin historial tampoco: no hay peso que ofrecer y las reps van con él.
+  expect(suggest([], range(8, 12)).reps).toBe(null)
 })
 
 test('the stall window is exactly n sessions and an improvement clears it', () => {

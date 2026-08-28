@@ -57,6 +57,13 @@
       "when": 1787782003984,
       "tag": "0007_app_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787926105199,
+      "tag": "0008_suggested_reps",
+      "breakpoints": true
     }
   ]
 }

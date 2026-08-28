@@ -126,6 +126,7 @@ function ghostOf(
 ): string | null {
   if (field === 'weight' && set.suggestedWeightG !== null)
     return formatWeight(set.suggestedWeightG, unit, locale, { withUnit: false })
+  if (field === 'reps' && set.suggestedReps !== null) return nf(locale).format(set.suggestedReps)
   const previous = formatField(field, prev, unit, locale)
   if (previous !== null) return previous
   return field === 'reps' ? targetReps(set) : null
@@ -141,6 +142,7 @@ function ghostOf(
 export function ghostNumber(field: Field, set: Row, prev: Row | null, unit: Unit): number | null {
   if (field === 'weight' && set.suggestedWeightG !== null)
     return Math.round(gToUnit(set.suggestedWeightG, unit) * 100) / 100
+  if (field === 'reps' && set.suggestedReps !== null) return set.suggestedReps
   const previous = fieldNumber(field, prev, unit)
   if (previous !== null) return previous
   return field === 'reps' ? (set.targetRepsMin ?? set.targetRepsMax) : null

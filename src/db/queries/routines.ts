@@ -924,6 +924,7 @@ export function startSessionFromDay(dayId: number): number {
         .get().id
 
       const suggestedWeightG = suggestion.weightG
+      const suggestedReps = suggestion.reps
 
       // Un ejercicio al que le borraron todas las series igual necesita una fila donde tipear,
       // igual que el que agregás a mano (`addExercise`).
@@ -936,6 +937,7 @@ export function startSessionFromDay(dayId: number): number {
                   orderIndex: 0,
                   kind: 'normal' as const,
                   suggestedWeightG,
+                  suggestedReps,
                 },
               ]
             : sets.map((s, i) => ({
@@ -947,6 +949,7 @@ export function startSessionFromDay(dayId: number): number {
                 // La entrada en calor no se sugiere con el peso de trabajo: el fantasma se confirma
                 // solo al tildar, y una serie de calentamiento quedaría anotada con los 100 kg.
                 suggestedWeightG: s.kind === 'warmup' ? null : suggestedWeightG,
+                suggestedReps: s.kind === 'warmup' ? null : suggestedReps,
                 completedAt: null,
               })),
         )

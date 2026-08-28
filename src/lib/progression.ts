@@ -7,8 +7,8 @@ import { roundToIncrement } from './units'
  * (`v_work_set`) — una entrada en calor no sugiere, no estanca y no carga un músculo (trampa #2).
  *
  * Nada de esto escribe: la app sugiere, nunca aplica (§2.2). La salida de `suggest` termina en
- * `set_entry.suggested_weight_g` como texto fantasma, y se vuelve dato recién cuando el usuario
- * tilda la serie.
+ * `set_entry.suggested_weight_g` / `suggested_reps` como texto fantasma, y se vuelve dato recién
+ * cuando el usuario tilda la serie.
  */
 
 export type { Feedback, Reason }
@@ -34,7 +34,7 @@ export type SuggestOptions = {
   rpeMode: 'rpe' | 'rir' | 'none'
 }
 
-export type Suggestion = { weightG: number | null; reason: Reason }
+export type Suggestion = { weightG: number | null; reps: number | null; reason: Reason }
 
 /** E07. Volumen semanal por músculo, en series duras. */
 export type Landmark = { mev: number; mav: number; mrv: number }
@@ -119,13 +119,15 @@ function missedReps(snapshot: SessionSnapshot, targetRepsMin: number | null): bo
 }
 
 /**
- * E01/E02/E04/E09 en una sola función. La precedencia es la del plan y se lee de arriba abajo:
+ * E01/E02/E04/E09: el peso y el porqué. La precedencia es la del plan y se lee de arriba abajo:
  * `deload > stall > feedback_hard > rpe_hard > rpe_easy > double/linear > repeat`.
- *
- * El objetivo de reps sale de los argumentos y, si no vienen, de lo que pedía la sesión anterior:
- * un ejercicio suelto (sin rutina) igual arrastra el rango que tenía la última vez.
  */
-export function suggest(history: SessionSnapshot[], opts: SuggestOptions): Suggestion {
+function suggestWeight(
+  history: SessionSnapshot[],
+  opts: SuggestOptions,
+  targetRepsMin: number | null,
+  targetRepsMax: number | null,
+): { weightG: number | null; reason: Reason } {
   const last = history[0]
   const top = topWeightG(last)
   if (!last || top === null) return { reason: 'none', weightG: null }
@@ -138,8 +140,6 @@ export function suggest(history: SessionSnapshot[], opts: SuggestOptions): Sugge
   if (last.feedback?.difficulty === 3 || last.feedback?.pain === 1)
     return { reason: 'feedback_hard', weightG: top }
 
-  const targetRepsMin = opts.targetRepsMin ?? last.sets[0]?.targetRepsMin ?? null
-  const targetRepsMax = opts.targetRepsMax ?? last.sets[0]?.targetRepsMax ?? null
   const missed = missedReps(last, targetRepsMin)
   const rpe = opts.rpeMode === 'none' ? null : avgEffort(last)
 
@@ -171,6 +171,60 @@ export function suggest(history: SessionSnapshot[], opts: SuggestOptions): Sugge
     if (now > 0 && now >= before) return { reason: 'linear', weightG: round(top + opts.incrementG) }
   }
   return { reason: 'repeat', weightG: top }
+}
+
+/** Los escalones del rango: mínimo, medio y tope, sin repetidos. "8–12" son 8, 10 y 12. */
+function repLevels(min: number, max: number): number[] {
+  return [...new Set([min, Math.floor((min + max) / 2), max])]
+}
+
+/**
+ * E02 del lado de las repeticiones: el objetivo del día. Sube de a un escalón mientras el peso se
+ * queda quieto y vuelve al mínimo apenas se mueve (arriba por progresión, abajo por estancamiento o
+ * deload) — subir peso y reps el mismo día es subir dos veces.
+ *
+ * Manda la serie MÁS FLOJA de la sesión pasada: todas tienen que llegar al escalón antes de pasar al
+ * que sigue, que es la misma regla con la que el peso espera al tope del rango.
+ */
+function suggestReps(
+  last: SessionSnapshot | undefined,
+  top: number | null,
+  weightG: number | null,
+  targetRepsMin: number | null,
+  targetRepsMax: number | null,
+): number | null {
+  // Un objetivo de un número solo (5×5) es un rango de un escalón, no "sin rango".
+  const min = targetRepsMin ?? targetRepsMax
+  const max = targetRepsMax ?? targetRepsMin
+  if (!last || top === null || weightG === null || min === null || max === null) return null
+  if (weightG !== top) return min
+
+  let lowest: number | null = null
+  for (const s of last.sets) {
+    if (s.reps !== null && (lowest === null || s.reps < lowest)) lowest = s.reps
+  }
+  // Una sesión anotada sin repeticiones (solo peso) no tiene escalón desde el cual seguir.
+  if (lowest === null) return min
+  // Con todas las series en el tope el peso ya subiría (y esto sería `min`); el `?? max` es para el
+  // dato raro que se cuela igual: una serie anotada por arriba del rango, o el rango achicado ayer.
+  return repLevels(min, max).find((r) => r > lowest) ?? max
+}
+
+/**
+ * La sugerencia del día: cuánto peso, cuántas repeticiones y por qué.
+ *
+ * El objetivo de reps sale de los argumentos y, si no vienen, de lo que pedía la sesión anterior:
+ * un ejercicio suelto (sin rutina) igual arrastra el rango que tenía la última vez.
+ */
+export function suggest(history: SessionSnapshot[], opts: SuggestOptions): Suggestion {
+  const last = history[0]
+  const targetRepsMin = opts.targetRepsMin ?? last?.sets[0]?.targetRepsMin ?? null
+  const targetRepsMax = opts.targetRepsMax ?? last?.sets[0]?.targetRepsMax ?? null
+  const weight = suggestWeight(history, opts, targetRepsMin, targetRepsMax)
+  return {
+    ...weight,
+    reps: suggestReps(last, topWeightG(last), weight.weightG, targetRepsMin, targetRepsMax),
+  }
 }
 
 const DAY_MS = 86_400_000

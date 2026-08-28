@@ -21,6 +21,7 @@ for (const file of [
   '0005_progression.sql',
   '0006_tools.sql',
   '0007_app_lock.sql',
+  '0008_suggested_reps.sql',
 ]) {
   const sql = readFileSync(join(import.meta.dir, 'migrations', file), 'utf8')
   for (const statement of sql.split('--> statement-breakpoint')) {
@@ -181,6 +182,10 @@ test('starting a day preloads real uncompleted rows with targets and a suggested
   // Doble progresión (E02): las 8 reps de la sesión pasada pasaron el tope del rango pedido (5),
   // así que la sugerencia sube un incremento (2,5 kg de ajustes) sobre los 62,5.
   expect(rows.map((r) => r.suggestedWeightG)).toEqual([65_000, 65_000, 65_000])
+  // Con el peso arriba, el objetivo de reps arranca en el mínimo del rango que guía la sugerencia
+  // (el 5–5 de la primera serie). Sugerido también: `reps` sigue vacío.
+  expect(rows.map((r) => r.suggestedReps)).toEqual([5, 5, 5])
+  expect(rows.every((r) => r.reps === null)).toBe(true)
   expect(session?.exercises[0].se.suggestedReason).toBe('double')
   expect(rows.map((r) => r.orderIndex)).toEqual([0, 1, 2])
 })
@@ -198,6 +203,7 @@ test('an exercise left without target sets still gets a row to type into', () =>
   expect(session?.exercises[0].sets[0].targetRepsMin).toBeNull()
   // Sin historial no hay nada que sugerir, y la fila lo dice.
   expect(session?.exercises[0].sets[0].suggestedWeightG).toBeNull()
+  expect(session?.exercises[0].sets[0].suggestedReps).toBeNull()
   expect(session?.exercises[0].se.suggestedReason).toBe('none')
 })
 

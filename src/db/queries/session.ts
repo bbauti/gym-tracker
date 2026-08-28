@@ -151,6 +151,7 @@ export function addExercise(sessionId: number, exerciseId: number): number {
         orderIndex: 0,
         kind: 'normal',
         suggestedWeightG: suggestion.weightG,
+        suggestedReps: suggestion.reps,
       })
       .run()
     return seId

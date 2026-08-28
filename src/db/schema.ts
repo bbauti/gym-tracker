@@ -315,6 +315,8 @@ export const setEntry = sqliteTable(
       onDelete: 'set null',
     }),
     suggestedWeightG: integer('suggested_weight_g'),
+    /** El escalón del rango que toca hoy (E02), fantasma igual que el peso: nadie lo aplica. */
+    suggestedReps: integer('suggested_reps'),
     isPr: integer('is_pr', { mode: 'boolean' }).notNull().default(false),
     completedAt: integer('completed_at'),
     note: text('note'),

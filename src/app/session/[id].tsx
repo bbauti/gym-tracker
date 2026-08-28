@@ -248,24 +248,40 @@ function better(a: Row, b: Row): boolean {
   return (a.durationMs ?? a.distanceMm ?? 0) > (b.durationMs ?? b.distanceMm ?? 0)
 }
 
-/**
- * La mejor serie del ejercicio en una línea ("100 kg × 8"), para la imagen que se comparte. `null`
- * cuando no se completó nada: un ejercicio sin series hechas no entra en la tarjeta.
- *
- * Con unidad, a diferencia de la tabla de la pantalla: la imagen se mira fuera de la app y ahí no
- * hay encabezado de columna que diga si son kg o lb.
- */
-function bestLine(sets: Row[], unit: Unit): string | null {
-  let best: Row | null = null
-  for (const set of sets) {
-    if (set.completedAt === null || set.kind === 'warmup') continue
-    if (best === null || better(set, best)) best = set
-  }
-  if (best === null) return null
+/** Las series que la tarjeta cuenta: de trabajo y hechas. Lo demás no se comparte. */
+const isDoneWorkSet = (s: Row) => s.completedAt !== null && s.kind !== 'warmup'
+
+/** La mejor serie en una línea ("100 kg × 8"), o lo que tenga (solo reps, solo peso, tiempo). */
+function bestOf(sets: Row[], unit: Unit): string | null {
+  const best = sets.reduce((a, b) => (better(b, a) ? b : a))
   const weight = best.weightG === null ? null : formatWeight(best.weightG, unit, locale)
   if (weight !== null && best.reps !== null) return `${weight} × ${best.reps}`
   if (best.reps !== null) return `${best.reps} ${t('session.reps')}`
   return weight ?? (best.durationMs === null ? null : formatDuration(best.durationMs))
+}
+
+/**
+ * La línea del ejercicio en la imagen que se comparte. Un entrenamiento se lee por lo que se
+ * repitió, así que cuando las series completadas son todas iguales la línea es esa serie con su
+ * cuenta ("3 × 10 · 40 kg"); si no coinciden, la cuenta y la mejor ("3 series · mejor 40 kg × 12").
+ * `null` cuando no se completó nada: un ejercicio sin series hechas no entra en la tarjeta.
+ *
+ * Con unidad, a diferencia de la tabla de la pantalla: la imagen se mira fuera de la app y ahí no
+ * hay encabezado de columna que diga si son kg o lb.
+ */
+function exerciseLine(sets: Row[], unit: Unit): string | null {
+  const done = sets.filter(isDoneWorkSet)
+  if (done.length === 0) return null
+  const n = done.length
+  const [first] = done
+  const same = done.every((s) => s.weightG === first.weightG && s.reps === first.reps)
+  if (same && first.reps !== null)
+    return first.weightG === null
+      ? `${n} × ${first.reps}`
+      : `${n} × ${first.reps} · ${formatWeight(first.weightG, unit, locale)}`
+  const count = plural(n, t('history.sets.one', { n }), t('history.sets.other', { n }))
+  const best = bestOf(done, unit)
+  return best === null ? count : `${count} · ${t('share.best')} ${best}`
 }
 
 type Found = { ex: SessionTree['exercises'][number]; set: Row; index: number }
@@ -658,8 +674,8 @@ export default function SessionScreen() {
       if (restEndsAt !== null && set.completedAt === restStartedAt) endRest()
       return
     }
-    // Los campos sin tocar se confirman solos, con la misma precedencia que dibuja la celda: el
-    // peso que sugirió la rutina primero, después lo de la vez anterior. Lo tipeado pisa a los dos.
+    // Los campos sin tocar se confirman solos, con la misma precedencia que dibuja la celda: lo que
+    // sugirió la rutina (peso y reps) primero, después lo de la vez anterior. Lo tipeado pisa todo.
     // Un solo write.
     const fill: SetPatch = {}
     const prev = ghostFor(ex.sets, index, prevs.get(ex.se.id) ?? [])
@@ -668,6 +684,10 @@ export default function SessionScreen() {
       if (hasValue(field, set)) continue
       if (field === 'weight' && set.suggestedWeightG !== null) {
         fill.weightG = set.suggestedWeightG
+        continue
+      }
+      if (field === 'reps' && set.suggestedReps !== null) {
+        fill.reps = set.suggestedReps
         continue
       }
       if (prev && hasValue(field, prev)) Object.assign(fill, columnPatch(field, prev))
@@ -824,9 +844,13 @@ export default function SessionScreen() {
     const { unit } = live.current.settings
     const s = now.session
     const lines = now.exercises
-      .map((ex) => ({ detail: bestLine(ex.sets, unit), name: exerciseName(ex.exercise, locale) }))
+      .map((ex) => ({
+        detail: exerciseLine(ex.sets, unit),
+        name: exerciseName(ex.exercise, locale),
+      }))
       .filter((line): line is { detail: string; name: string } => line.detail !== null)
     const prs = now.exercises.reduce((n, ex) => n + ex.sets.filter((set) => set.isPr).length, 0)
+    const doneSets = now.exercises.reduce((n, ex) => n + ex.sets.filter(isDoneWorkSet).length, 0)
     const rest = lines.length - MAX_CARD_EXERCISES
     const stats = [
       {
@@ -835,6 +859,7 @@ export default function SessionScreen() {
           elapsedMs(s.startedAt, s.pausedMs, s.pausedAt, s.endedAt ?? Date.now()),
         ),
       },
+      { label: t('share.sets'), value: String(doneSets) },
       {
         label: t('progress.volume'),
         value: formatWeight(sessionVolume(sessionId).volumeG, unit, locale, {
@@ -1171,11 +1196,14 @@ function ExerciseCard({
   // calor sin sugerencia. 'none' y 'repeat' no se explican — el fantasma de la celda ya dice todo.
   const reason = se.suggestedReason
   const suggestedG = sets.find((s) => s.suggestedWeightG !== null)?.suggestedWeightG ?? null
+  const suggestedReps = sets.find((s) => s.suggestedReps !== null)?.suggestedReps ?? null
   const suggestion =
     suggestedG !== null && reason !== null && reason !== 'none' && reason !== 'repeat'
-      ? `${t('progression.suggested', {
-          weight: formatWeight(suggestedG, settings.unit, locale),
-        })} · ${t(`progression.reason.${reason}`)}`
+      ? [
+          t('progression.suggested', { weight: formatWeight(suggestedG, settings.unit, locale) }),
+          ...(suggestedReps === null ? [] : [t('progression.suggestedReps', { n: suggestedReps })]),
+          t(`progression.reason.${reason}`),
+        ].join(' · ')
       : null
   // Preguntar cómo salió recién cuando no queda nada por hacer en el ejercicio, y una sola vez: la
   // hoja nunca se abre sola (§7.5), y con una respuesta guardada el pie desaparece.

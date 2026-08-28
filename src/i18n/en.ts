@@ -63,6 +63,7 @@ export default {
   'celebration.prs.other': '{n} new records',
 
   'progression.suggested': 'Suggested {weight}',
+  'progression.suggestedReps': '{n} reps',
   'progression.reason.linear': 'linear progression',
   'progression.reason.double': 'double progression',
   'progression.reason.rpe_easy': 'last one felt easy',
@@ -483,6 +484,8 @@ export default {
   'share.chart': 'Share chart',
   'share.unavailable': 'This device cannot share images.',
   'share.footer': 'Gym Tracker',
+  'share.sets': 'Sets',
+  'share.best': 'best',
 
   'history.today': 'Today',
   'history.yesterday': 'Yesterday',
