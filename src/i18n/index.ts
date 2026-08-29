@@ -1,4 +1,5 @@
 import { getLocales } from 'expo-localization'
+import Storage from 'expo-sqlite/kv-store'
 import en from './en'
 import es from './es'
 
@@ -7,7 +8,34 @@ export type TKey = keyof typeof es
 
 // ponytail: idioma del dispositivo, fijo por sesión. Techo: `settings.locale` no se respeta y
 // cambiarlo pide reiniciar. Upgrade: mover `locale` a un useSyncExternalStore leído de settings.
-export const locale: Locale = getLocales()[0].languageCode === 'es' ? 'es' : 'en'
+const LOCALE_KEY = 'locale'
+
+/**
+ * La preferencia vive en el kv-store de expo-sqlite (sync) y no en `settings`: este módulo se importa
+ * antes de que exista la base y no puede depender de ella. Se lee una vez, al arrancar: cambiarla
+ * se aplica al reabrir la app (25 archivos formatean fechas con `locale` como constante).
+ */
+function storedLocale(): Locale | null {
+  try {
+    const v = Storage.getItemSync(LOCALE_KEY)
+    return v === 'es' || v === 'en' ? v : null
+  } catch {
+    return null // bun:test y web: sin módulo nativo, sin preferencia
+  }
+}
+
+export function getLocalePreference(): Locale | null {
+  return storedLocale()
+}
+
+/** `null` = seguir al sistema. */
+export function setLocalePreference(value: Locale | null): void {
+  if (value) Storage.setItemSync(LOCALE_KEY, value)
+  else Storage.removeItemSync(LOCALE_KEY)
+}
+
+export const locale: Locale =
+  storedLocale() ?? (getLocales()[0].languageCode === 'es' ? 'es' : 'en')
 
 const dict: Record<TKey, string> = locale === 'es' ? es : en
 

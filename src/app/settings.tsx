@@ -17,7 +17,7 @@ import {
 } from '@/db/backup'
 import { getSettings, updateSettings } from '@/db/queries/settings'
 import { useQuery } from '@/db/useQuery'
-import { locale, plural, t } from '@/i18n'
+import { getLocalePreference, locale, plural, setLocalePreference, t } from '@/i18n'
 import { defaultIncrementG } from '@/lib/units'
 import { available, availableSync } from '@/lock'
 import Card from '@/ui/Card'
@@ -27,6 +27,7 @@ import Menu from '@/ui/Menu'
 import PressableScale from '@/ui/PressableScale'
 import SectionHeader from '@/ui/SectionHeader'
 import Text from '@/ui/Text'
+import { toast } from '@/ui/Toast'
 import { colors, MIN_TARGET, radius, spacing } from '@/ui/tokens'
 
 /** Las cuentas del import van casi siempre en singular: "1 sesión", no "1 sesiones". */
@@ -280,6 +281,13 @@ const rpeItems = [
 
 const rpeLabel = { rpe: t('session.rpe'), rir: t('session.rir'), none: t('settings.rpeNone') }
 
+const languageItems = [
+  { key: 'system', label: t('settings.languageSystem') },
+  { key: 'es', label: t('settings.languageEs') },
+  { key: 'en', label: t('settings.languageEn') },
+]
+const languageLabel = { es: t('settings.languageEs'), en: t('settings.languageEn') }
+
 const sexItems = [
   { key: 'm', label: t('settings.sexM') },
   { key: 'f', label: t('settings.sexF') },
@@ -294,6 +302,7 @@ const restItems = REST_CHOICES.map((n) => ({ key: String(n), label: t('settings.
 
 export default function SettingsScreen() {
   const [busy, setBusy] = useState<string | null>(null)
+  const [language, setLanguage] = useState<'es' | 'en' | null>(getLocalePreference)
   const settings = useQuery(getSettings, ['settings'])
   // Arranca con lo que ya contestó `available()` (el layout raíz lo pregunta al montar la app): null
   // solo la primera vez, y ahí la fila arranca deshabilitada y sin la aclaración al pie.
@@ -430,6 +439,17 @@ export default function SettingsScreen() {
             value={t('settings.seconds', { n: settings.defaultRestSec })}
           />
           {/* Solo lo usan Wilks y DOTS (J09); por eso puede quedar sin elegir. */}
+          <PickerRow
+            items={languageItems}
+            label={t('settings.language')}
+            onSelect={(key) => {
+              const next = key === 'es' || key === 'en' ? key : null
+              setLocalePreference(next)
+              setLanguage(next)
+              toast.show({ text: t('settings.languageRestart') })
+            }}
+            value={language ? languageLabel[language] : t('settings.languageSystem')}
+          />
           <PickerRow
             items={sexItems}
             label={t('settings.sex')}
