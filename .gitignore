@@ -13,10 +13,13 @@ expo-env.d.ts
 .kotlin/
 *.orig.*
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
+google-services.json
+GoogleService-Info.plist
 
 # Metro
 .metro-health-check*
@@ -30,11 +33,15 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# local env files and credentials
+.env*
+credentials.json
 
 # typescript
 *.tsbuildinfo
+
+# tests
+coverage/
 
 example
 
@@ -45,6 +52,13 @@ example
 # local data / agent files
 *.db
 *.db-*
+*.sqlite
+*.sqlite3
 CLAUDE.md
+AGENTS.md
 .claude/
+.agents/
+.codex/
+.omc/
+.sisyphus/
 DEEP_REVIEW*
